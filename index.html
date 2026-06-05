@@ -270,6 +270,7 @@ const CONFIG = {
     bloom: { a:0.70, peak:0.80, b:0.90,  amp:1.00 },  // Hawking-point flash (BH→evaporation)
     ricci: { a:0.82, peak:0.90, b:0.985, amp:0.85 },  // volume (isotropic) dips toward 0, restores
     weyl:  { a:0.84, peak:0.93, b:0.998, amp:0.45 },  // shear (anisotropic, area-preserving) persists
+    rings: { a:0.80, peak:0.90, b:0.99,  amp:1.00 },  // CCC concentric circles seeding the next sky
   },
   // Black hole presence (collapse → evaporation). Drives gravitational lensing
   // (Einstein ring + shadow) and the accretion disk. bump → 0 at the seam.
@@ -337,6 +338,7 @@ function derive(phase, logDepth, aeonCount){
   const bloom  = x.bloom.amp * bump(phase, x.bloom.a, x.bloom.peak, x.bloom.b);
   const volume = 1.0 - x.ricci.amp * bump(phase, x.ricci.a, x.ricci.peak, x.ricci.b);
   const shear  = x.weyl.amp  * bump(phase, x.weyl.a,  x.weyl.peak,  x.weyl.b);
+  const rings  = x.rings.amp * bump(phase, x.rings.a, x.rings.peak, x.rings.b);  // CCC circles
 
   // Black hole: presence (0..1) drives the accretion disk; lens = Einstein radius².
   // Both are 0 outside [a,b] (b<seam) so lensing/disk vanish exactly at the wrap.
@@ -355,7 +357,7 @@ function derive(phase, logDepth, aeonCount){
   return {
     logDepth, aeonCount,
     phase, criticality, volume, shear, bloom, forkSign, forkCue,
-    bh: bhMass, lens,
+    bh: bhMass, lens, rings,
     stage: stageForPhase(phase),
     zoomRate: 1.0,   // STEP 5: variable pacing
     zoomDir: +1,     // v2: -1 for cosmic-web zoom-out
@@ -368,7 +370,7 @@ function derive(phase, logDepth, aeonCount){
 function assertSeamContinuity(){
   const e = 1e-3;
   const a = derive(e, 0, 0), b = derive(1 - e, 0, 0);
-  const fields = ["criticality","volume","shear","bloom","forkCue","bh","lens"];
+  const fields = ["criticality","volume","shear","bloom","forkCue","bh","lens","rings"];
   for (const f of fields){
     if (Math.abs(a[f] - b[f]) > CONFIG.seamTol){
       console.warn(`[seam] '${f}' discontinuous across wrap: `+
@@ -433,6 +435,7 @@ const GPU = (() => {
     uniform float u_bloom;        // Hawking-point flash intensity (0 at wrap)
     uniform float u_lens;         // gravitational lensing: Einstein radius² (0 at wrap)
     uniform float u_bh;           // black-hole presence 0..1 (accretion disk; 0 at wrap)
+    uniform float u_rings;        // CCC Hawking-point concentric circles (0 at wrap)
     uniform float u_time;         // COSMETIC ONLY — must never drive the zoom/seam
 
     #define TAU 6.28318530718
@@ -573,6 +576,13 @@ const GPU = (() => {
       float halo  = exp(-r0*r0*4.0) * 0.5;     // soft surrounding glow
       col += u_bloom * (flash + halo) * vec3(1.0, 0.86, 0.62);
 
+      // CCC HAWKING-POINT RINGS — concentric low-variance circles imprinted around
+      // the point, seeding the next aeon's sky (the *contested* CMB signature).
+      // Centred on screen, faded at centre/edge; u_rings is 0 at the seam.
+      float circ = pow(0.5 + 0.5*cos(r0 * 26.0 * TAU), 8.0);     // thin bright circles
+      float rfade = smoothstep(0.04, 0.12, r0) * (1.0 - smoothstep(0.45, 0.85, r0));
+      col += u_rings * circ * rfade * vec3(0.55, 0.78, 1.0) * 0.5;
+
       // faint cosmetic grain (allowed — does not touch the zoom/seam)
       float g = hash(gl_FragCoord.xy + fract(u_time));
       col += (g - 0.5) * 0.010;
@@ -691,6 +701,7 @@ const GPU = (() => {
       bloom:       gl.getUniformLocation(sceneProg, "u_bloom"),
       lens:        gl.getUniformLocation(sceneProg, "u_lens"),
       bh:          gl.getUniformLocation(sceneProg, "u_bh"),
+      rings:       gl.getUniformLocation(sceneProg, "u_rings"),
       time:        gl.getUniformLocation(sceneProg, "u_time"),
     };
     bu = { tex: gl.getUniformLocation(blurProg, "u_tex"), res: gl.getUniformLocation(blurProg, "u_res"),
@@ -743,6 +754,7 @@ const GPU = (() => {
     gl.uniform1f(u.bloom, state.bloom);
     gl.uniform1f(u.lens, state.lens);
     gl.uniform1f(u.bh, state.bh);
+    gl.uniform1f(u.rings, state.rings);
     gl.uniform1f(u.time, (performance.now() - started) / 1000);
     drawQuad(aScene);
 
