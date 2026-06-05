@@ -262,6 +262,15 @@ const CONFIG = {
     knifeWidth: 0.12,     // gaussian width of the knife-edge window
     forkAmp: 0.03,        // angular tip of the lattice at the knife-edge (fraction of a turn)
   },
+  // STEP 4 — conformal crossover. Each effect is a triangular bump {a,peak,b};
+  // it is EXACTLY 0 outside [a,b], so every effect vanishes at the seam (b≤1, a≥0)
+  // → phase=1 returns identical to the smooth start. Weyl(b=1.0) outlasts the
+  // Ricci dip (b<1) so shear persists after isotropic scale is restored.
+  crossover: {
+    bloom: { a:0.70, peak:0.80, b:0.90,  amp:1.00 },  // Hawking-point flash (BH→evaporation)
+    ricci: { a:0.82, peak:0.90, b:0.985, amp:0.85 },  // volume (isotropic) dips toward 0, restores
+    weyl:  { a:0.84, peak:0.93, b:0.998, amp:0.45 },  // shear (anisotropic, area-preserving) persists
+  },
   confidenceColors: {     // mirror of CSS vars (single source for JS-side use)
     solid: "#5fd0c8", contested: "#e3b56b", interpretive: "#b48cf0",
   },
@@ -297,14 +306,31 @@ function stageForPhase(p){
       PERIODIC fields (criticality/volume/shear/bloom) MUST satisfy f(0)===f(1).
       >>> STEP 2 & 4 replace the placeholder math with the real staged curves. <<<
    ============================================================================ */
+// --- pure helpers for the periodic curves ---
+function smoothstep(e0, e1, x){ const t = Math.min(Math.max((x-e0)/(e1-e0), 0), 1); return t*t*(3-2*t); }
+// triangular bump: 0 at a, 1 at peak, 0 at b; EXACTLY 0 outside [a,b]. Endpoints
+// land on machine-zero, so any effect built from bump(...,b<=1) vanishes at the seam.
+function bump(p, a, peak, b){
+  if (p <= a || p >= b) return 0;
+  return p < peak ? smoothstep(a, peak, p) : 1 - smoothstep(peak, b, p);
+}
+
 function derive(phase, logDepth, aeonCount){
   // criticality 0→1→0 over the octave: drives the smooth→crystal→collapse blend.
   // Seam-safe by construction — cos(2π·phase) gives criticality(0)===criticality(1)===0,
   // so the composite field reduces to the plain smooth field at the wrap.
   const criticality = 0.5 - 0.5*Math.cos(2*Math.PI*phase); // 0→1→0
-  const volume = 1.0;                                       // Ricci  (STEP 4: → 0 at crossover)
-  const shear  = 0.0;                                       // Weyl   (STEP 4: persists across boundary)
-  const bloom  = 0.0;                                       // Hawking point (STEP 4)
+
+  // Conformal crossover (seam-physical). Each is a bump that is exactly 0 (volume: 1)
+  // at the seam, so the rebirth equals the smooth start:
+  //   bloom  — Hawking-point flash during BH→evaporation
+  //   volume — Ricci / isotropic scale, dips toward 0 then is restored (the rebirth)
+  //   shear  — Weyl / anisotropic area-preserving distortion; window reaches the seam
+  //            edge so it lingers after volume recovers (only Weyl carries across)
+  const x = CONFIG.crossover;
+  const bloom  = x.bloom.amp * bump(phase, x.bloom.a, x.bloom.peak, x.bloom.b);
+  const volume = 1.0 - x.ricci.amp * bump(phase, x.ricci.a, x.ricci.peak, x.ricci.b);
+  const shear  = x.weyl.amp  * bump(phase, x.weyl.a,  x.weyl.peak,  x.weyl.b);
 
   // Knife-edge bifurcation: the lattice tips one way, then the other, as phase
   // crosses the critical point. forkSign carries the direction; sin(2π·phase) is
@@ -390,6 +416,9 @@ const GPU = (() => {
     uniform float u_delta;        // Δ echo period (one octave = one period in log-r)
     uniform float u_criticality;  // 0 smooth → 1 collapse (seam-safe: 0 at the wrap)
     uniform float u_fork;         // knife-edge bifurcation cue (seam-safe; ~0 at wrap)
+    uniform float u_volume;       // Ricci / isotropic scale: 1 normal → 0 at crossover (1 at wrap)
+    uniform float u_shear;        // Weyl / anisotropic area-preserving distortion (0 at wrap)
+    uniform float u_bloom;        // Hawking-point flash intensity (0 at wrap)
     uniform float u_time;         // COSMETIC ONLY — must never drive the zoom/seam
 
     #define TAU 6.28318530718
@@ -447,7 +476,15 @@ const GPU = (() => {
     }
 
     void main(){
-      vec2 uv = (gl_FragCoord.xy - 0.5*u_resolution) / u_resolution.y;
+      vec2 uv0 = (gl_FragCoord.xy - 0.5*u_resolution) / u_resolution.y;   // screen-centred
+
+      // WEYL shear — anisotropic, AREA-PRESERVING (det=1) hyperbolic boost: squeeze
+      // along one diagonal, stretch the other. Identity at the seam (u_shear=0), so it
+      // distorts only through the crossover. This is the conformally-invariant piece.
+      float ch = 0.5*(exp(u_shear) + exp(-u_shear));
+      float sh = 0.5*(exp(u_shear) - exp(-u_shear));
+      vec2 uv = mat2(ch, sh, sh, ch) * uv0;
+
       float r   = max(length(uv), 1e-4);
       float ang = atan(uv.y, uv.x);            // [-π,π]
 
@@ -481,6 +518,20 @@ const GPU = (() => {
 
       // calm core: fade to base toward the centre (the point we fall into)
       col = mix(SM_LO, col, smoothstep(0.0, 0.05, r));
+
+      // RICCI / volume — isotropic scale loss. As volume→0 the field washes toward a
+      // scaleless tone (scale stops meaning anything). Restored to 1 at the seam, and
+      // it recovers BEFORE the shear window closes, so the sheared (Weyl) structure is
+      // what remains visible into the rebirth — "only the Weyl curvature carries across".
+      vec3 scaleless = vec3(0.03, 0.035, 0.05);
+      col = mix(scaleless, col, clamp(u_volume, 0.0, 1.0));
+
+      // HAWKING-POINT bloom — one concentrated central flash (screen-centred, so the
+      // shear can't smear it). Seeds the next octave's field. Zero at the seam.
+      float r0    = length(uv0);
+      float flash = exp(-r0*r0*36.0);          // tight hot core
+      float halo  = exp(-r0*r0*4.0) * 0.5;     // soft surrounding glow
+      col += u_bloom * (flash + halo) * vec3(1.0, 0.86, 0.62);
 
       // faint cosmetic grain (allowed — does not touch the zoom/seam)
       float g = hash(gl_FragCoord.xy + fract(u_time));
@@ -520,6 +571,9 @@ const GPU = (() => {
       delta:       gl.getUniformLocation(prog, "u_delta"),
       criticality: gl.getUniformLocation(prog, "u_criticality"),
       fork:        gl.getUniformLocation(prog, "u_fork"),
+      volume:      gl.getUniformLocation(prog, "u_volume"),
+      shear:       gl.getUniformLocation(prog, "u_shear"),
+      bloom:       gl.getUniformLocation(prog, "u_bloom"),
       time:        gl.getUniformLocation(prog, "u_time"),
     };
     gl.uniform1f(u.delta, CONFIG.DELTA);   // Δ is constant; set once
@@ -537,6 +591,9 @@ const GPU = (() => {
     gl.uniform1f(u.phase, state.phase);   // [0,1) — the only zoom driver
     gl.uniform1f(u.criticality, state.criticality);
     gl.uniform1f(u.fork, state.forkCue);
+    gl.uniform1f(u.volume, state.volume);
+    gl.uniform1f(u.shear, state.shear);
+    gl.uniform1f(u.bloom, state.bloom);
     gl.uniform1f(u.time, (performance.now() - started) / 1000);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
   }
