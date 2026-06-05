@@ -66,6 +66,7 @@ Each stage carries a confidence tag, colour-coded:
 - Sinks are an interface `(state) → void`. Audio (deferred) is just a third sink.
 - DPR-aware sizing, capped. Pause on `visibilitychange`.
 - No constants outside CONFIG; no experience tuning outside TIMELINE.
+- **Mobile-first.** Design for phones first, enhance up. Touch is the primary input: tap = play/pause, horizontal drag = scrub (keyboard stays as the desktop equivalent). Fluid type via `clamp()`, positions offset by `env(safe-area-inset-*)`, `touch-action:none` so the canvas owns gestures. HUD tunables/thresholds live in CONFIG.
 
 ## Guardrails (must survive into the build)
 - **Startup continuity assertion**: sample every periodic field near 0 and near 1; fail loudly if `|f(ε) − f(1−ε)| > tol`.
