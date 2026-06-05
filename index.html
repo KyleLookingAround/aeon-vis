@@ -96,6 +96,20 @@
                border-radius:999px; padding:2px 8px; font-size:clamp(8px,2.2vw,9.5px);
                letter-spacing:0.16em; text-transform:uppercase; opacity:0.9; white-space:nowrap; }
 
+  /* Choptuik mass-scaling inset (top-left, under the chip); fades in via .show */
+  #choptuik { left:calc(var(--safe-l) + var(--edge)); top:calc(var(--safe-t) + var(--edge) + 32px);
+              width:clamp(150px, 44vw, 184px); opacity:0; transform:translateY(-4px);
+              transition:opacity .3s ease, transform .3s ease; }
+  #choptuik.show { opacity:0.92; transform:none; }
+  #choptuik .cap { font-size:clamp(7.5px,2vw,9px); letter-spacing:0.06em; color:var(--ink-dim);
+                   text-transform:uppercase; margin-bottom:2px; }
+  #choptuik .cap b { color:var(--ink); font-weight:400; }
+  #choptuik svg { width:100%; height:auto; display:block; }
+  #ck-axis { stroke:var(--hairline); stroke-width:1; fill:none; }
+  #ck-line { stroke:var(--accent, var(--solid)); stroke-width:1.4; opacity:0.85; }
+  #ck-dot  { fill:var(--accent, var(--solid)); }
+  #choptuik text { fill:var(--ink-dim); font-size:7px; letter-spacing:0.04em; }
+
   /* bottom dock — caption, stage timeline, stat readout, hint (centered column) */
   #dock { position:fixed; left:50%; transform:translateX(-50%);
           bottom:calc(var(--safe-b) + var(--edge)); z-index:2;
@@ -171,6 +185,7 @@
   #chip, #dock { transition:opacity .25s ease; }
   body.hud-hidden #chip,
   body.hud-hidden #dock,
+  body.hud-hidden #choptuik,
   body.hud-hidden #debug { opacity:0; }
   body.hud-hidden #timeline { pointer-events:none; }   /* not scrubbable while hidden */
 
@@ -200,6 +215,20 @@
     <span class="dot"></span>
     <span id="chip-label">—</span>
     <span id="chip-conf">—</span>
+  </div>
+
+  <!-- Choptuik mass-scaling inset: M ∝ (p−p*)^γ. A log-log line of slope γ with a
+       marker that slides toward the critical point as criticality rises. Shown
+       during the critical-collapse stages (aeon mode). -->
+  <div id="choptuik" class="hud">
+    <div class="cap">critical collapse &nbsp; <b>M ∝ (p−p*)<sup>γ</sup></b> &nbsp; γ=0.37</div>
+    <svg viewBox="0 0 110 64" aria-hidden="true">
+      <path id="ck-axis" d="M14 8 V54 H104" />
+      <line id="ck-line" x1="14" y1="50.5" x2="104" y2="8" />
+      <circle id="ck-dot" cx="104" cy="8" r="2.6" />
+      <text x="92" y="62">p−p*</text>
+      <text x="2" y="12">M</text>
+    </svg>
   </div>
 
   <!-- Control buttons (the only interactive HUD elements), in a right-aligned
@@ -900,6 +929,8 @@ const HUD = (() => {
     ["r-phase","r-aeon","r-depth","r-delta","caption","chip-label","chip-conf","r-state",
      "tl-track","tl-head"].forEach(id => el[id] = document.getElementById(id));
     el.chip = document.getElementById("chip");
+    el.choptuik = document.getElementById("choptuik");
+    el.ckDot = document.getElementById("ck-dot");
     el["r-delta"].textContent = CONFIG.DELTA.toFixed(2);
 
     // build BOTH stage timelines once (honesty layer as data). CSS shows the set
@@ -949,6 +980,18 @@ const HUD = (() => {
       if (cache.activeSeg) cache.activeSeg.classList.remove("on");
       if (active) active.classList.add("on");
       cache.activeSeg = active;
+    }
+
+    // Choptuik mass-scaling inset — visible through the critical-collapse stages
+    // (aeon mode). The marker rides the slope-γ log-log line: ε = p−p* ∝ (1−crit);
+    // as criticality rises ε→0 and M ∝ ε^γ → 0, so the dot slides to the origin.
+    const showCk = !isWeb && state.criticality > 0.22;
+    if (cache.ck !== showCk){ cache.ck = showCk; el.choptuik.classList.toggle("show", showCk); }
+    if (showCk){
+      const eps = Math.min(Math.max(1 - state.criticality, 1e-3), 1);
+      const t = (Math.log10(eps) + 3) / 3;          // 0 (at ε=1e-3) … 1 (at ε=1)
+      el.ckDot.setAttribute("cx", (14 + t * 90).toFixed(1));
+      el.ckDot.setAttribute("cy", (50.5 - t * 42.5).toFixed(1));
     }
   }
   return { init, update };
