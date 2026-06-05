@@ -174,7 +174,7 @@
       <path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5" /></svg>
   </button>
 
-  <div id="notice">step 1 · seamless log-zoom<br>static self-similar field</div>
+  <div id="notice">step 2 · phase-driven morph<br>smooth → crystal → collapse</div>
   <div id="controls" class="hud">
     <span class="touch-only">tap · play/pause<br>drag · scrub</span>
     <span class="kbd-only">space · play/pause<br>← → · scrub<br>f · fullscreen<br>?phase=0.42 · jump &nbsp; ?debug</span>
@@ -199,6 +199,11 @@ const CONFIG = {
     dragScrub: 1.1,       // phase units for a full screen-width drag
     tapMaxMove: 8,        // px of movement still counted as a tap (not a drag)
     tapMaxMs: 350,        // max press duration counted as a tap
+  },
+  morph: {                // STEP 2 — smooth→crystal→collapse + knife-edge fork
+    knifeCenter: 0.45,    // phase where the bifurcation peaks (near the knife-edge stage)
+    knifeWidth: 0.12,     // gaussian width of the knife-edge window
+    forkAmp: 0.03,        // angular tip of the lattice at the knife-edge (fraction of a turn)
   },
   confidenceColors: {     // mirror of CSS vars (single source for JS-side use)
     solid: "#5fd0c8", contested: "#e3b56b", interpretive: "#b48cf0",
@@ -236,16 +241,26 @@ function stageForPhase(p){
       >>> STEP 2 & 4 replace the placeholder math with the real staged curves. <<<
    ============================================================================ */
 function derive(phase, logDepth, aeonCount){
-  // --- placeholder periodic fields (seam-safe: all equal at 0 and 1) ---
-  const criticality = 0.5 - 0.5*Math.cos(2*Math.PI*phase); // 0→1→0  (STEP 2: real smooth→crystal→collapse)
+  // criticality 0→1→0 over the octave: drives the smooth→crystal→collapse blend.
+  // Seam-safe by construction — cos(2π·phase) gives criticality(0)===criticality(1)===0,
+  // so the composite field reduces to the plain smooth field at the wrap.
+  const criticality = 0.5 - 0.5*Math.cos(2*Math.PI*phase); // 0→1→0
   const volume = 1.0;                                       // Ricci  (STEP 4: → 0 at crossover)
   const shear  = 0.0;                                       // Weyl   (STEP 4: persists across boundary)
   const bloom  = 0.0;                                       // Hawking point (STEP 4)
-  const forkSign = phase < 0.5 ? 1 : -1;                    // not a continuous field; excluded from seam check
+
+  // Knife-edge bifurcation: the lattice tips one way, then the other, as phase
+  // crosses the critical point. forkSign carries the direction; sin(2π·phase) is
+  // its smooth signed envelope — naturally zero at the balance point AND the seam,
+  // gated to the knife-edge by a gaussian window. So forkCue is seam-safe.
+  const forkSign = phase < 0.5 ? 1 : -1;                    // ±1 direction (display/logic; v2)
+  const m = CONFIG.morph;
+  const knife = Math.exp(-Math.pow((phase - m.knifeCenter) / m.knifeWidth, 2));
+  const forkCue = Math.sin(2*Math.PI*phase) * knife * m.forkAmp;
 
   return {
     logDepth, aeonCount,
-    phase, criticality, volume, shear, bloom, forkSign,
+    phase, criticality, volume, shear, bloom, forkSign, forkCue,
     stage: stageForPhase(phase),
     zoomRate: 1.0,   // STEP 5: variable pacing
     zoomDir: +1,     // v2: -1 for cosmic-web zoom-out
@@ -258,7 +273,7 @@ function derive(phase, logDepth, aeonCount){
 function assertSeamContinuity(){
   const e = 1e-3;
   const a = derive(e, 0, 0), b = derive(1 - e, 0, 0);
-  const fields = ["criticality","volume","shear","bloom"];
+  const fields = ["criticality","volume","shear","bloom","forkCue"];
   for (const f of fields){
     if (Math.abs(a[f] - b[f]) > CONFIG.seamTol){
       console.warn(`[seam] '${f}' discontinuous across wrap: `+
@@ -301,19 +316,22 @@ const GPU = (() => {
     attribute vec2 aPos;
     void main(){ gl_Position = vec4(aPos, 0.0, 1.0); }`;
 
-  // STEP 1 — seamless infinite log-zoom over a STATIC self-similar field.
+  // STEP 2 — phase-driven morph over the seamless log-zoom of STEP 1.
   //
-  // Idea (PLAN §4.5): in log-polar coords, build a field that is EXACTLY periodic
-  // in the log-radius with period Δ, then offset its radial coordinate by phase.
-  // Advancing phase by 1 shifts the radial sample by exactly one period → the field
-  // is identical → phase=1 ≡ phase=0 by construction, not by tuning.
-  //
-  // The shader's ONLY zoom driver is u_phase. u_time touches cosmetic grain only.
+  // The log-zoom is unchanged: z = log(r)/Δ - phase, exactly 1-periodic in phase,
+  // so the wrap is invisible by construction. On top of it, criticality (0→1→0)
+  // blends three self-similar fields:  smooth → crystal lattice → collapse.
+  // Because criticality(0)===criticality(1)===0, the composite reduces to the plain
+  // smooth field at the seam — the morph CANNOT tear the loop, whatever the lattice
+  // and collapse fields look like. u_phase is still the only zoom driver; u_time is
+  // cosmetic only.
   const FRAG = `
     precision highp float;
     uniform vec2  u_resolution;
     uniform float u_phase;        // [0,1) — the ONLY thing allowed to drive the zoom
     uniform float u_delta;        // Δ echo period (one octave = one period in log-r)
+    uniform float u_criticality;  // 0 smooth → 1 collapse (seam-safe: 0 at the wrap)
+    uniform float u_fork;         // knife-edge bifurcation cue (seam-safe; ~0 at wrap)
     uniform float u_time;         // COSMETIC ONLY — must never drive the zoom/seam
 
     #define TAU 6.28318530718
@@ -336,45 +354,75 @@ const GPU = (() => {
       return mix(mix(a,b,f.x), mix(c,d,f.x), f.y);
     }
 
+    // --- field 1: SMOOTH — soft layered noise (the STEP 1 field) ---
+    float smoothField(float z, float v, float r){
+      float field = 0.0, amp = 0.5, sum = 0.0;
+      for (int k = 0; k < 4; k++){
+        float N = pow(2.0, float(k) + 1.0);    // 2,4,8,16 cells/period
+        float aa = smoothstep(0.0, 0.30, r * N * 0.30);   // centre anti-alias
+        field += amp * aa * (pnoise(vec2(z, v) * N, N) - 0.5);
+        sum   += amp;  amp *= 0.55;
+      }
+      return clamp(field / sum + 0.5, 0.0, 1.0);
+    }
+
+    // --- field 2: CRYSTAL — a regular lattice (order out of the smooth phase) ---
+    // Square cell grid in (z,v); integer cell counts keep both axes seamless.
+    float latticeField(float z, float v, float r){
+      const float NA = 16.0;                   // angular cells (integer → angular seam ok)
+      const float NR = 3.0;                    // radial cells per echo period
+      vec2 g = vec2(z * NR, v * NA);
+      vec2 c = abs(fract(g) - 0.5);            // distance to cell centre on each axis
+      float lines = smoothstep(0.46, 0.5, max(c.x, c.y));   // bright cell walls
+      float nodes = smoothstep(0.12, 0.0, length(c));       // bright lattice nodes
+      float aa = smoothstep(0.0, 0.22, r);     // fade the fine grid near the centre
+      return clamp((lines * 0.6 + nodes) * aa, 0.0, 1.0);
+    }
+
+    // --- field 3: COLLAPSE — converging shells + radial filaments + hot core ---
+    float collapseField(float z, float v, float r){
+      const float SPOKES = 6.0;                // integer → angular seam ok
+      float streak = pow(0.5 + 0.5*sin(v*TAU*SPOKES), 4.0);     // sharp filaments
+      float shell  = pow(1.0 - abs(fract(z)*2.0 - 1.0), 6.0);   // thin shell each Δ (seam-safe)
+      float core   = smoothstep(0.45, 0.0, r);                  // intensifying centre
+      return clamp(streak*0.45 + shell*0.7 + core, 0.0, 1.0);
+    }
+
     void main(){
       vec2 uv = (gl_FragCoord.xy - 0.5*u_resolution) / u_resolution.y;
       float r   = max(length(uv), 1e-4);
       float ang = atan(uv.y, uv.x);            // [-π,π]
 
-      // log-polar coordinates
+      // log-polar coordinates; zoom-IN: subtract phase (camera falls inward forever)
       float u = log(r) / u_delta + 0.5;        // radius in echo periods (Δ ↔ 1 unit)
       float v = ang / TAU + 0.5;               // angle in [0,1); torus wraps the seam
+      float z = u - u_phase;                   // the only phase term — 1-periodic
 
-      // zoom-IN: subtract phase so features expand outward and new detail emerges
-      // from the centre (the camera falls inward forever).
-      float z = u - u_phase;
+      // knife-edge tip: a tiny angular skew of the ordered fields (seam-safe via u_fork)
+      float vF = v + u_fork;
 
-      // self-similar field: a few octaves, each EXACTLY 1-periodic in phase.
-      float field = 0.0, amp = 0.5, sum = 0.0;
-      for (int k = 0; k < 4; k++){
-        float N = pow(2.0, float(k) + 1.0);    // 2, 4, 8, 16 cells per period
-        // anti-alias: fade an octave near the centre where its rings go sub-pixel
-        float aa = smoothstep(0.0, 0.30, r * N * 0.30);
-        vec2 p = vec2(z * N, v * N);
-        field += amp * aa * (pnoise(p, N) - 0.5);
-        sum   += amp;
-        amp   *= 0.55;
-      }
-      field = clamp(field / sum + 0.5, 0.0, 1.0);
+      // three palettes (dark observatory base; sharp accents per regime)
+      vec3 SM_LO = vec3(0.015,0.022,0.038), SM_HI = vec3(0.10,0.16,0.26);  // smooth: deep blue
+      vec3 LT_LO = vec3(0.02, 0.04, 0.055),  LT_HI = vec3(0.30,0.66,0.70); // crystal: cyan
+      vec3 CO_LO = vec3(0.05, 0.02, 0.05),   CO_HI = vec3(0.78,0.42,0.62); // collapse: hot violet
 
-      // tone-map into a dark observatory palette
-      vec3 lo  = vec3(0.015, 0.022, 0.038);
-      vec3 hi  = vec3(0.10,  0.16,  0.26);
-      vec3 col = mix(lo, hi, field);
+      vec3 cSmooth   = mix(SM_LO, SM_HI, smoothField(z, v,  r));
+      vec3 cLattice  = mix(LT_LO, LT_HI, latticeField(z, vF, r));
+      vec3 cCollapse = mix(CO_LO, CO_HI, collapseField(z, vF, r));
 
-      // faint echo-shell hairlines at each Δ boundary — pure self-similar structure,
-      // periodic in phase, so it cannot tear the seam.
+      // compose by criticality: smooth →(0..0.55)→ lattice →(0.45..1)→ collapse
+      float a = smoothstep(0.0, 0.55, u_criticality);
+      float b = smoothstep(0.45, 1.0, u_criticality);
+      vec3 col = mix(cSmooth, cLattice, a);
+      col = mix(col, cCollapse, b);
+
+      // faint echo-shell hairlines at each Δ boundary — periodic, cannot tear the seam
       float shell = fract(z);
       float line  = smoothstep(0.0, 0.035, shell) * smoothstep(0.0, 0.035, 1.0 - shell);
       col += (1.0 - line) * vec3(0.05, 0.10, 0.16) * smoothstep(0.0, 0.15, r);
 
       // calm core: fade to base toward the centre (the point we fall into)
-      col = mix(lo, col, smoothstep(0.0, 0.05, r));
+      col = mix(SM_LO, col, smoothstep(0.0, 0.05, r));
 
       // faint cosmetic grain (allowed — does not touch the zoom/seam)
       float g = hash(gl_FragCoord.xy + fract(u_time));
@@ -412,6 +460,8 @@ const GPU = (() => {
       resolution:  gl.getUniformLocation(prog, "u_resolution"),
       phase:       gl.getUniformLocation(prog, "u_phase"),
       delta:       gl.getUniformLocation(prog, "u_delta"),
+      criticality: gl.getUniformLocation(prog, "u_criticality"),
+      fork:        gl.getUniformLocation(prog, "u_fork"),
       time:        gl.getUniformLocation(prog, "u_time"),
     };
     gl.uniform1f(u.delta, CONFIG.DELTA);   // Δ is constant; set once
@@ -427,6 +477,8 @@ const GPU = (() => {
   function render(state){
     gl.uniform2f(u.resolution, gl.drawingBufferWidth, gl.drawingBufferHeight);
     gl.uniform1f(u.phase, state.phase);   // [0,1) — the only zoom driver
+    gl.uniform1f(u.criticality, state.criticality);
+    gl.uniform1f(u.fork, state.forkCue);
     gl.uniform1f(u.time, (performance.now() - started) / 1000);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
   }
