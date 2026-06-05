@@ -635,7 +635,14 @@ const GPU = (() => {
         if (r < rs){ captured = true; break; }
         if (r > 64.0 && dot(pos, vel) > 0.0) break;           // escaped to infinity
         float dt  = clamp(r * 0.09, 0.20, 2.2);               // adaptive step (fine near the hole)
-        vec3  acc = -1.5 * h2 * pos / pow(dot(pos,pos), 2.5); // GR light bending
+        // Schwarzschild light-bending + KERR frame-dragging: the gravitomagnetic
+        // field of a spinning mass (dipole along the spin axis ŷ) exerts a Lorentz-
+        // like force 2·v×B_g that swirls rays around the hole → a lopsided photon
+        // ring and a dragged inner disc (the signature of spin).
+        vec3  rhat = pos / r;
+        vec3  spinAx = vec3(0.0, 1.0, 0.0);
+        vec3  Bg = (3.0 * dot(spinAx, rhat) * rhat - spinAx) / (r*r*r);
+        vec3  acc = -1.5 * h2 * pos / pow(dot(pos,pos), 2.5) + 2.4 * cross(vel, Bg);
         vec3  nvel = vel + acc * dt;
         vec3  npos = pos + nvel * dt;
         if (pos.y * npos.y < 0.0){                            // crossed the equatorial plane → disk
