@@ -1,0 +1,380 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>AEON — Conformal Zoom Visualiser</title>
+
+<!--
+  ============================================================================
+  AEON — scaffold. RUNS as-is (WebGL boot + placeholder shader), but the
+  visualiser logic is intentionally STUBBED. Build it via prompts.md, step by
+  step. Read CLAUDE.md for the rules; PLAN.md for the reasoning.
+
+  THE HARD INVARIANT: phase=1 must look identical to phase=0 (seamless loop).
+    - JS owns the only clock. Shader receives `phase ∈ [0,1)`. It must NOT
+      integrate its own clock for the zoom. `u_time` is COSMETIC ONLY.
+    - Only `phase` drives appearance. `logDepth`/`aeonCount` touch the HUD only.
+
+  Architecture: functional core / imperative shell, unidirectional:
+    dt → clock.advance → derive(PURE) → gpu.render + hud.update
+  ============================================================================
+-->
+
+<!-- Distinctive technical type (degrades to system mono offline). Step 3 may refine. -->
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500&display=swap" rel="stylesheet" />
+
+<style>
+  /* ---- CONFIG: theme tokens (keep visual constants here, not inline) ---- */
+  :root {
+    --bg:            #05060a;
+    --ink:           #c8d4e0;
+    --ink-dim:       #6b7686;
+    --hairline:      rgba(160,180,210,0.14);
+    --panel:         rgba(8,11,18,0.55);
+    /* confidence accents — sharp on a restrained base */
+    --solid:         #5fd0c8;
+    --contested:     #e3b56b; /* amber */
+    --interpretive:  #b48cf0;
+    --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html, body { height:100%; background:var(--bg); color:var(--ink);
+               font-family:var(--mono); overflow:hidden; }
+  #gl { position:fixed; inset:0; width:100%; height:100%; display:block; }
+
+  /* atmospheric vignette over the canvas — depth, not flat black */
+  #vignette { position:fixed; inset:0; pointer-events:none;
+    background: radial-gradient(120% 120% at 50% 50%,
+      transparent 55%, rgba(0,0,0,0.55) 100%); }
+
+  /* ---- HUD shell (stub; built in step 3) ---- */
+  .hud { position:fixed; pointer-events:none; font-weight:300;
+         letter-spacing:0.04em; text-shadow:0 1px 12px rgba(0,0,0,0.8); }
+  .hud .k { color:var(--ink-dim); }
+  .hud .v { color:var(--ink); }
+
+  #readout { left:24px; bottom:22px; font-size:12.5px; line-height:1.7; }
+  #readout .row { display:flex; gap:10px; }
+  #readout .label { color:var(--ink); font-size:14px; letter-spacing:0.12em;
+                    text-transform:uppercase; margin-bottom:6px; }
+
+  #chip { left:24px; top:22px; font-size:11px; letter-spacing:0.14em;
+          text-transform:uppercase; display:flex; align-items:center; gap:8px; }
+  #chip .dot { width:8px; height:8px; border-radius:50%; background:var(--solid);
+               box-shadow:0 0 10px currentColor; }
+
+  #caption { left:50%; bottom:64px; transform:translateX(-50%); max-width:min(640px,80vw);
+             text-align:center; font-size:14px; line-height:1.6; color:var(--ink);
+             opacity:0.92; }
+
+  #notice { right:20px; top:20px; font-size:10.5px; letter-spacing:0.1em;
+            color:var(--ink-dim); text-align:right; text-transform:uppercase;
+            border:1px solid var(--hairline); padding:7px 10px; border-radius:2px;
+            background:var(--panel); }
+
+  #controls { right:20px; bottom:20px; font-size:10.5px; color:var(--ink-dim);
+              letter-spacing:0.08em; text-align:right; line-height:1.8; }
+
+  #debug { position:fixed; left:24px; top:64px; font-size:10.5px; color:var(--solid);
+           line-height:1.5; display:none; white-space:pre; opacity:0.8; }
+  body.debug #debug { display:block; }
+
+  #fatal { position:fixed; inset:0; display:none; place-items:center; padding:32px;
+           text-align:center; font-size:13px; color:#ff9a9a; background:var(--bg); }
+</style>
+</head>
+<body>
+  <canvas id="gl"></canvas>
+  <div id="vignette"></div>
+
+  <!-- HUD (populated by the HUD sink; structure is a stub for step 3) -->
+  <div id="chip" class="hud"><span class="dot"></span><span id="chip-label">—</span></div>
+  <div id="readout" class="hud">
+    <div class="label">AEON</div>
+    <div class="row"><span class="k">phase</span><span class="v" id="r-phase">—</span></div>
+    <div class="row"><span class="k">aeon</span><span class="v" id="r-aeon">—</span></div>
+    <div class="row"><span class="k">depth</span><span class="v" id="r-depth">—</span></div>
+    <div class="row"><span class="k">Δ</span><span class="v" id="r-delta">—</span></div>
+  </div>
+  <div id="caption" class="hud">—</div>
+  <div id="notice">scaffold · placeholder shader<br>step 1 replaces the zoom</div>
+  <div id="controls" class="hud">space · play/pause<br>← → · scrub<br>?phase=0.42 · jump &nbsp; ?debug</div>
+  <div id="debug"></div>
+  <div id="fatal"></div>
+
+<script>
+"use strict";
+/* ============================================================================
+   1. CONFIG — every magic number lives here. Nothing hardcoded downstream.
+   ============================================================================ */
+const CONFIG = {
+  DELTA: 3.44,            // Choptuik echo period (massless scalar). Octave length & RG eigenvalue.
+  GAMMA: 0.37,            // Choptuik mass-scaling exponent (noted; not used in core loop).
+  center: [0.5, 0.5],     // zoom focus, in normalised screen coords
+  dprCap: 2,              // device-pixel-ratio cap (perf)
+  baseRate: 0.05,         // phase units / second at rate 1.0 (slow, contemplative)
+  seamTol: 1e-4,          // continuity assertion tolerance for periodic fields
+  confidenceColors: {     // mirror of CSS vars (single source for JS-side use)
+    solid: "#5fd0c8", contested: "#e3b56b", interpretive: "#b48cf0",
+  },
+};
+
+/* ============================================================================
+   2. TIMELINE — declarative stage table. Drives caption + label + confidence.
+      THE HONESTY LAYER LIVES HERE AS DATA. Contiguous over [0,1).
+   ============================================================================ */
+const TIMELINE = [
+  { phaseStart:0.00, phaseEnd:0.15, id:"smooth",   label:"Smooth spacetime",  confidence:"solid",
+    caption:"Far from the threshold, spacetime is smooth — curved gently by mass." },
+  { phaseStart:0.15, phaseEnd:0.35, id:"crystal",  label:"Crystallization",   confidence:"solid",
+    caption:"Near the black-hole threshold, spacetime freezes into a regular pattern — a spacetime crystal." },
+  { phaseStart:0.35, phaseEnd:0.50, id:"knife",    label:"Knife-edge",        confidence:"solid",
+    caption:"Balanced on the critical point. Add a sliver of energy and it tips — dissolve, or collapse." },
+  { phaseStart:0.50, phaseEnd:0.70, id:"echo",     label:"Echoing",           confidence:"solid",
+    caption:"At criticality the solution echoes, repeating at ever-smaller scales. The zoom is a renormalization step; Δ≈3.44 sets its rate." },
+  { phaseStart:0.70, phaseEnd:0.85, id:"hawking",  label:"BH → Hawking point", confidence:"contested",
+    caption:"A microscopic black hole forms and, over ~10¹⁰⁰ years, evaporates into one concentrated flash. (CCC reading — evidence disputed.)" },
+  { phaseStart:0.85, phaseEnd:1.00, id:"crossover",label:"Conformal crossover",confidence:"interpretive",
+    caption:"With no mass left, scale loses meaning — the universe is conformally reborn. Only the Weyl (tidal) structure carries through." },
+];
+function stageForPhase(p){
+  for (let i=0;i<TIMELINE.length;i++){ const s=TIMELINE[i];
+    if (p>=s.phaseStart && p<s.phaseEnd) return s; }
+  return TIMELINE[TIMELINE.length-1];
+}
+
+/* ============================================================================
+   3. derive() — PURE. phase (+ monotonic counters) → DerivedState.
+      No DOM, no GL, no Math.random. The testable core.
+      PERIODIC fields (criticality/volume/shear/bloom) MUST satisfy f(0)===f(1).
+      >>> STEP 2 & 4 replace the placeholder math with the real staged curves. <<<
+   ============================================================================ */
+function derive(phase, logDepth, aeonCount){
+  // --- placeholder periodic fields (seam-safe: all equal at 0 and 1) ---
+  const criticality = 0.5 - 0.5*Math.cos(2*Math.PI*phase); // 0→1→0  (STEP 2: real smooth→crystal→collapse)
+  const volume = 1.0;                                       // Ricci  (STEP 4: → 0 at crossover)
+  const shear  = 0.0;                                       // Weyl   (STEP 4: persists across boundary)
+  const bloom  = 0.0;                                       // Hawking point (STEP 4)
+  const forkSign = phase < 0.5 ? 1 : -1;                    // not a continuous field; excluded from seam check
+
+  return {
+    logDepth, aeonCount,
+    phase, criticality, volume, shear, bloom, forkSign,
+    stage: stageForPhase(phase),
+    zoomRate: 1.0,   // STEP 5: variable pacing
+    zoomDir: +1,     // v2: -1 for cosmic-web zoom-out
+  };
+}
+
+/* ============================================================================
+   GUARDRAIL — startup continuity assertion. Periodic fields must match at the seam.
+   ============================================================================ */
+function assertSeamContinuity(){
+  const e = 1e-3;
+  const a = derive(e, 0, 0), b = derive(1 - e, 0, 0);
+  const fields = ["criticality","volume","shear","bloom"];
+  for (const f of fields){
+    if (Math.abs(a[f] - b[f]) > CONFIG.seamTol){
+      console.warn(`[seam] '${f}' discontinuous across wrap: `+
+        `f(${e})=${a[f].toFixed(5)} vs f(${1-e})=${b[f].toFixed(5)}. `+
+        `The infinite zoom will visibly tear.`);
+    }
+  }
+}
+
+/* ============================================================================
+   4. Clock — owns the ONLY mutable state. Reads ?phase=. play/pause/scrub.
+   ============================================================================ */
+const Clock = {
+  phase: 0, aeonCount: 0, playing: true, _last: 0,
+  init(){
+    const q = new URLSearchParams(location.search);
+    if (q.has("phase")){ this.phase = ((parseFloat(q.get("phase"))%1)+1)%1; this.playing = false; }
+    if (q.has("debug")) document.body.classList.add("debug");
+  },
+  get logDepth(){ return (this.aeonCount + this.phase) * CONFIG.DELTA; },
+  advance(dt){
+    if (!this.playing) return;
+    // delta-time; variable rate hook (STEP 5) multiplies baseRate by state.zoomRate
+    this.phase += CONFIG.baseRate * dt;
+    while (this.phase >= 1){ this.phase -= 1; this.aeonCount++; }   // SEAM: wrap, never reset appearance
+  },
+  toggle(){ this.playing = !this.playing; },
+  scrub(d){ this.playing = false; this.phase = ((this.phase + d)%1 + 1)%1; },
+};
+
+/* ============================================================================
+   5. GPU sink — owns context/program/uniforms. Fullscreen TRIANGLE (no quad).
+      A uniform-adapter maps DerivedState → uniforms (add a uniform in ONE place).
+      >>> STEP 1 replaces the placeholder fragment shader with the seamless zoom. <<<
+   ============================================================================ */
+const GPU = (() => {
+  let gl, prog, u = {}, started = 0;
+
+  const VERT = `
+    attribute vec2 aPos;
+    void main(){ gl_Position = vec4(aPos, 0.0, 1.0); }`;
+
+  // PLACEHOLDER shader: proves the clock→uniform→render path and models the
+  // invariant (its only phase term is periodic, so the wrap is already seamless).
+  // STEP 1: replace with the complex-log seamless infinite zoom over a static field.
+  const FRAG = `
+    precision highp float;
+    uniform vec2  u_resolution;
+    uniform float u_phase;        // [0,1) — the ONLY thing allowed to drive appearance
+    uniform float u_criticality;
+    uniform float u_time;         // COSMETIC ONLY — must never drive the zoom/seam
+    void main(){
+      vec2 uv = (gl_FragCoord.xy - 0.5*u_resolution) / u_resolution.y;
+      float r = length(uv);
+      float pulse = 0.5 - 0.5*cos(6.2831853*u_phase);     // periodic 0→1→0 (seam-safe)
+      vec3 base = mix(vec3(0.015,0.02,0.035), vec3(0.04,0.07,0.11), pulse);
+      float ring = smoothstep(0.012, 0.0, abs(r - 0.34));  // instrument reticle
+      base += ring * vec3(0.30,0.62,0.92) * 0.45;
+      float grain = fract(sin(dot(gl_FragCoord.xy, vec2(12.99,78.23)) + u_time*0.5) * 43758.5);
+      base += (grain - 0.5) * 0.012;                       // faint cosmetic grain (allowed)
+      base += u_criticality * 0.04;
+      gl_FragColor = vec4(base, 1.0);
+    }`;
+
+  function compile(type, src){
+    const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS))
+      throw new Error("shader compile: " + gl.getShaderInfoLog(s));
+    return s;
+  }
+  function init(canvas){
+    gl = canvas.getContext("webgl") || canvas.getContext("experimental-webgl");
+    if (!gl) throw new Error("WebGL unavailable");
+    prog = gl.createProgram();
+    gl.attachShader(prog, compile(gl.VERTEX_SHADER, VERT));
+    gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, FRAG));
+    gl.linkProgram(prog);
+    if (!gl.getProgramParameter(prog, gl.LINK_STATUS))
+      throw new Error("program link: " + gl.getProgramInfoLog(prog));
+    gl.useProgram(prog);
+
+    // fullscreen triangle (3 verts, covers clip space; no diagonal seam)
+    const buf = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 3,-1, -1,3]), gl.STATIC_DRAW);
+    const loc = gl.getAttribLocation(prog, "aPos");
+    gl.enableVertexAttribArray(loc);
+    gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+
+    u = {
+      resolution:  gl.getUniformLocation(prog, "u_resolution"),
+      phase:       gl.getUniformLocation(prog, "u_phase"),
+      criticality: gl.getUniformLocation(prog, "u_criticality"),
+      time:        gl.getUniformLocation(prog, "u_time"),
+    };
+    started = performance.now();
+  }
+  function resize(canvas){
+    const dpr = Math.min(window.devicePixelRatio || 1, CONFIG.dprCap);
+    const w = Math.floor(canvas.clientWidth * dpr), h = Math.floor(canvas.clientHeight * dpr);
+    if (canvas.width !== w || canvas.height !== h){ canvas.width = w; canvas.height = h; }
+    gl.viewport(0, 0, canvas.width, canvas.height);
+  }
+  // uniform-adapter: DerivedState → uniforms (extend HERE as the shader grows)
+  function render(state){
+    gl.uniform2f(u.resolution, gl.drawingBufferWidth, gl.drawingBufferHeight);
+    gl.uniform1f(u.phase, state.phase);
+    gl.uniform1f(u.criticality, state.criticality);
+    gl.uniform1f(u.time, (performance.now() - started) / 1000);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+  }
+  return { init, resize, render };
+})();
+
+/* ============================================================================
+   6. HUD sink — same state; diffed DOM, text throttled ~10 Hz. (Shell = step 3.)
+   ============================================================================ */
+const HUD = (() => {
+  const el = {}; let lastText = 0, cache = {};
+  function init(){
+    ["r-phase","r-aeon","r-depth","r-delta","caption","chip-label"].forEach(id => el[id] = document.getElementById(id));
+    el.chipDot = document.querySelector("#chip .dot");
+    el["r-delta"].textContent = CONFIG.DELTA.toFixed(2);
+  }
+  function set(id, val){ if (cache[id] !== val){ cache[id] = val; el[id].textContent = val; } }
+  function update(state, now){
+    if (now - lastText < 100) return;          // ~10 Hz text
+    lastText = now;
+    set("r-phase", state.phase.toFixed(3));
+    set("r-aeon", String(state.aeonCount));
+    set("r-depth", state.logDepth.toFixed(2));
+    const s = state.stage;
+    set("chip-label", `${s.label} · ${s.confidence}`);
+    set("caption", s.caption);
+    const c = CONFIG.confidenceColors[s.confidence];
+    if (cache.dot !== c){ cache.dot = c; el.chipDot.style.color = c; }
+  }
+  return { init, update };
+})();
+
+/* ============================================================================
+   DEBUG overlay (?debug)
+   ============================================================================ */
+function debugText(state){
+  const d = document.getElementById("debug");
+  if (!document.body.classList.contains("debug")) return;
+  d.textContent =
+    `phase       ${state.phase.toFixed(4)}\n`+
+    `criticality ${state.criticality.toFixed(4)}\n`+
+    `volume      ${state.volume.toFixed(4)}\n`+
+    `shear       ${state.shear.toFixed(4)}\n`+
+    `bloom       ${state.bloom.toFixed(4)}\n`+
+    `forkSign    ${state.forkSign}\n`+
+    `stage       ${state.stage.id}\n`+
+    `aeon        ${state.aeonCount}   depth ${state.logDepth.toFixed(2)}`;
+}
+
+/* ============================================================================
+   Composition root — thin rAF loop wiring the four steps.
+   ============================================================================ */
+function main(){
+  const canvas = document.getElementById("gl");
+  try {
+    GPU.init(canvas);
+  } catch (err){
+    const f = document.getElementById("fatal");
+    f.style.display = "grid";
+    f.textContent = "Could not start WebGL.\n\n" + err.message;
+    return;
+  }
+  HUD.init();
+  Clock.init();
+  assertSeamContinuity();
+
+  let last = performance.now();
+  document.addEventListener("keydown", e => {
+    if (e.code === "Space"){ e.preventDefault(); Clock.toggle(); }
+    if (e.code === "ArrowRight") Clock.scrub(+0.005);
+    if (e.code === "ArrowLeft")  Clock.scrub(-0.005);
+  });
+  document.addEventListener("visibilitychange", () => { if (document.hidden) Clock.playing = false; });
+
+  // survive context loss
+  canvas.addEventListener("webglcontextlost", e => { e.preventDefault(); Clock.playing = false; });
+
+  function frame(now){
+    const dt = Math.min((now - last) / 1000, 0.1); last = now;     // delta-time, clamped
+    Clock.advance(dt);
+    GPU.resize(canvas);
+    const state = derive(Clock.phase, Clock.logDepth, Clock.aeonCount);  // PURE
+    GPU.render(state);          // sink 1
+    HUD.update(state, now);     // sink 2
+    debugText(state);
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+}
+main();
+</script>
+</body>
+</html>
