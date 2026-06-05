@@ -3,6 +3,12 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<!-- Standalone/immersive when installed to the home screen (iPhone's only true
+     fullscreen route, since iOS Safari has no element Fullscreen API). -->
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="theme-color" content="#05060a" />
 <title>AEON — Conformal Zoom Visualiser</title>
 
 <!--
@@ -105,6 +111,23 @@
             border:1px solid var(--hairline); padding:7px 10px; border-radius:2px;
             background:var(--panel); }
 
+  /* Fullscreen toggle — the one interactive HUD element (pointer-events:auto).
+     44px tap target; icon swaps via body.fs; hidden where the platform has no
+     Fullscreen API (body.no-fs, e.g. iPhone Safari). */
+  #fs-btn { position:fixed; top:calc(var(--safe-t) + var(--edge)); right:calc(var(--safe-r) + var(--edge));
+            width:44px; height:44px; display:grid; place-items:center; padding:0;
+            border:1px solid var(--hairline); border-radius:6px; background:var(--panel);
+            color:var(--ink-dim); cursor:pointer; pointer-events:auto;
+            -webkit-backdrop-filter:blur(6px); backdrop-filter:blur(6px);
+            transition:color .15s ease, border-color .15s ease; }
+  #fs-btn:hover, #fs-btn:active { color:var(--ink); border-color:rgba(160,180,210,0.32); }
+  #fs-btn:focus-visible { outline:1px solid var(--solid); outline-offset:2px; }
+  #fs-btn svg { width:20px; height:20px; display:block; }
+  #fs-btn .ic-exit { display:none; }
+  body.fs #fs-btn .ic-enter { display:none; }
+  body.fs #fs-btn .ic-exit  { display:block; }
+  body.no-fs #fs-btn { display:none; }
+
   #debug { position:fixed; left:calc(var(--safe-l) + var(--edge)); top:calc(var(--safe-t) + 56px);
            font-size:10.5px; color:var(--solid); line-height:1.5; display:none;
            white-space:pre; opacity:0.8; }
@@ -118,7 +141,8 @@
   @media (min-width:640px) {
     :root { --edge:22px; }
     #caption   { bottom:calc(var(--safe-b) + 64px); }
-    #notice    { display:block; }
+    /* sit the dev notice below the fullscreen button (top-right stack) */
+    #notice    { display:block; top:calc(var(--safe-t) + var(--edge) + 56px); }
     .touch-only{ display:none;  }
     .kbd-only  { display:block; }
   }
@@ -138,10 +162,22 @@
     <div class="row"><span class="k">Δ</span><span class="v" id="r-delta">—</span></div>
   </div>
   <div id="caption" class="hud">—</div>
+
+  <!-- Fullscreen toggle (the only interactive HUD element). Two icons; CSS swaps
+       them on body.fs. Hidden via body.no-fs where there's no Fullscreen API. -->
+  <button id="fs-btn" type="button" aria-label="Toggle fullscreen" title="Fullscreen (f)">
+    <svg class="ic-enter" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+         stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" /></svg>
+    <svg class="ic-exit" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+         stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5" /></svg>
+  </button>
+
   <div id="notice">step 1 · seamless log-zoom<br>static self-similar field</div>
   <div id="controls" class="hud">
     <span class="touch-only">tap · play/pause<br>drag · scrub</span>
-    <span class="kbd-only">space · play/pause<br>← → · scrub<br>?phase=0.42 · jump &nbsp; ?debug</span>
+    <span class="kbd-only">space · play/pause<br>← → · scrub<br>f · fullscreen<br>?phase=0.42 · jump &nbsp; ?debug</span>
   </div>
   <div id="debug"></div>
   <div id="fatal"></div>
@@ -457,11 +493,35 @@ function main(){
   Clock.init();
   assertSeamContinuity();
 
+  // Fullscreen — hides browser chrome for full immersion. Standard API with a
+  // webkit fallback (older Safari); feature-detected so the button hides on
+  // platforms that lack element fullscreen (iPhone Safari → use Add to Home Screen).
+  const docEl = document.documentElement;
+  const fsBtn = document.getElementById("fs-btn");
+  const fsSupported = !!(docEl.requestFullscreen || docEl.webkitRequestFullscreen);
+  const fsElement = () => document.fullscreenElement || document.webkitFullscreenElement || null;
+  function toggleFullscreen(){
+    if (!fsSupported) return;
+    if (fsElement()){
+      const exit = document.exitFullscreen || document.webkitExitFullscreen;
+      if (exit) exit.call(document);
+    } else {
+      const req = docEl.requestFullscreen || docEl.webkitRequestFullscreen;
+      if (req){ const p = req.call(docEl); if (p && p.catch) p.catch(() => {}); }
+    }
+  }
+  function syncFullscreen(){ document.body.classList.toggle("fs", !!fsElement()); }
+  if (!fsSupported) document.body.classList.add("no-fs");
+  fsBtn.addEventListener("click", toggleFullscreen);
+  document.addEventListener("fullscreenchange", syncFullscreen);
+  document.addEventListener("webkitfullscreenchange", syncFullscreen);
+
   let last = performance.now();
   document.addEventListener("keydown", e => {
     if (e.code === "Space"){ e.preventDefault(); Clock.toggle(); }
     if (e.code === "ArrowRight") Clock.scrub(+CONFIG.keyScrub);
     if (e.code === "ArrowLeft")  Clock.scrub(-CONFIG.keyScrub);
+    if (e.code === "KeyF"){ e.preventDefault(); toggleFullscreen(); }
   });
 
   // Touch / pointer input (covers mouse, touch and pen via Pointer Events):
