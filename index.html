@@ -73,43 +73,65 @@
     background: radial-gradient(120% 120% at 50% 50%,
       transparent 55%, rgba(0,0,0,0.55) 100%); }
 
-  /* ---- HUD shell (stub; built in step 3). Fluid type via clamp(); every edge
-     offset adds the matching safe-area inset so nothing hides under a notch. ---- */
+  /* ===== HUD — scientific-instrument readout (STEP 3) =====================
+     Fluid type via clamp(); edges offset by safe-area insets. Confidence is the
+     single accent: body[data-conf] sets --accent, inherited by chip, timeline,
+     state. The whole overlay reads `phase`/`stage` off the shared clock. ====== */
   .hud { position:fixed; pointer-events:none; font-weight:300;
-         letter-spacing:0.04em; text-shadow:0 1px 12px rgba(0,0,0,0.8); }
-  .hud .k { color:var(--ink-dim); }
-  .hud .v { color:var(--ink); }
+         letter-spacing:0.04em; text-shadow:0 1px 12px rgba(0,0,0,0.85); }
 
+  /* confidence → accent colour (one source: the palette vars) */
+  [data-conf="solid"]        { --accent: var(--solid); }
+  [data-conf="contested"]    { --accent: var(--contested); }
+  [data-conf="interpretive"] { --accent: var(--interpretive); }
+
+  /* regime chip — top-left: live status dot, stage label, confidence pill */
   #chip { top:calc(var(--safe-t) + var(--edge)); left:calc(var(--safe-l) + var(--edge));
-          font-size:clamp(10px,2.8vw,11px); letter-spacing:0.14em;
-          text-transform:uppercase; display:flex; align-items:center; gap:8px; }
-  #chip .dot { width:8px; height:8px; border-radius:50%; background:var(--solid);
-               box-shadow:0 0 10px currentColor; }
+          display:flex; align-items:center; gap:10px; max-width:min(70vw, 520px); }
+  #chip .dot { width:8px; height:8px; border-radius:50%; flex:0 0 auto;
+               background:var(--accent, var(--solid)); box-shadow:0 0 10px var(--accent, var(--solid)); }
+  #chip-label { color:var(--ink); font-size:clamp(12px,3.4vw,15px); letter-spacing:0.1em;
+                text-transform:uppercase; white-space:nowrap; }
+  #chip-conf { color:var(--accent, var(--solid)); border:1px solid var(--accent, var(--solid));
+               border-radius:999px; padding:2px 8px; font-size:clamp(8px,2.2vw,9.5px);
+               letter-spacing:0.16em; text-transform:uppercase; opacity:0.9; white-space:nowrap; }
 
-  #readout { left:calc(var(--safe-l) + var(--edge)); bottom:calc(var(--safe-b) + var(--edge));
-             font-size:clamp(11px,3vw,12.5px); line-height:1.7; }
-  #readout .row { display:flex; gap:10px; }
-  #readout .label { color:var(--ink); font-size:clamp(12px,3.4vw,14px); letter-spacing:0.12em;
-                    text-transform:uppercase; margin-bottom:6px; }
+  /* bottom dock — caption, stage timeline, stat readout, hint (centered column) */
+  #dock { position:fixed; left:50%; transform:translateX(-50%);
+          bottom:calc(var(--safe-b) + var(--edge)); z-index:2;
+          width:min(720px, calc(100vw - var(--safe-l) - var(--safe-r) - 2*var(--edge)));
+          display:flex; flex-direction:column; gap:11px; pointer-events:none; }
 
-  /* caption clears the bottom-corner readout/controls on a phone */
-  #caption { left:50%; transform:translateX(-50%);
-             bottom:calc(var(--safe-b) + 128px); max-width:min(640px,86vw);
-             text-align:center; font-size:clamp(12.5px,3.6vw,14px); line-height:1.6;
-             color:var(--ink); opacity:0.92; }
+  #caption { text-align:center; font-size:clamp(12px,3.4vw,14px); line-height:1.55;
+             color:var(--ink); opacity:0.95; }
 
-  #controls { right:calc(var(--safe-r) + var(--edge)); bottom:calc(var(--safe-b) + var(--edge));
-              font-size:clamp(9px,2.6vw,10.5px); color:var(--ink-dim);
-              letter-spacing:0.08em; text-align:right; line-height:1.8; }
-  .touch-only { display:block; }   /* mobile default: touch hints */
+  /* stage timeline — segments from TIMELINE, tinted by confidence; scrubbable */
+  #timeline { position:relative; height:22px; pointer-events:auto; cursor:pointer;
+              touch-action:none; }
+  #tl-track { position:absolute; left:0; right:0; top:50%; transform:translateY(-50%);
+              height:3px; background:var(--hairline); border-radius:2px; overflow:hidden; }
+  .tl-seg { position:absolute; top:0; bottom:0; opacity:0.26;
+            transition:opacity .2s ease; }
+  .tl-seg.c-solid        { background:var(--solid); }
+  .tl-seg.c-contested    { background:var(--contested); }
+  .tl-seg.c-interpretive { background:var(--interpretive); }
+  .tl-seg.on { opacity:0.9; }
+  #tl-head { position:absolute; top:1px; bottom:1px; width:2px; margin-left:-1px;
+             background:var(--ink); box-shadow:0 0 8px rgba(220,235,255,0.6); }
+
+  /* stat readout — tabular figures so nothing jitters */
+  #stats { display:flex; flex-wrap:wrap; justify-content:center; align-items:baseline;
+           gap:5px 16px; font-size:clamp(10px,2.7vw,11.5px); }
+  .stat { display:flex; gap:6px; align-items:baseline; }
+  .sk { color:var(--ink-dim); letter-spacing:0.14em; text-transform:uppercase; font-size:0.85em; }
+  .sv { color:var(--ink); font-variant-numeric:tabular-nums; }
+  .stat.state .sv { color:var(--accent, var(--solid)); letter-spacing:0.1em; }
+
+  /* control hint (one faint line); touch vs keyboard variants */
+  #hint { text-align:center; font-size:clamp(8.5px,2.2vw,10px); color:var(--ink-dim);
+          letter-spacing:0.1em; text-transform:uppercase; opacity:0.66; }
+  .touch-only { display:inline; }   /* mobile default: touch hints */
   .kbd-only   { display:none;  }
-
-  /* dev notice is clutter on a phone — hidden by default, shown ≥640px */
-  #notice { display:none; right:calc(var(--safe-r) + var(--edge)); top:calc(var(--safe-t) + var(--edge));
-            font-size:clamp(9px,2.4vw,10.5px); letter-spacing:0.1em;
-            color:var(--ink-dim); text-align:right; text-transform:uppercase;
-            border:1px solid var(--hairline); padding:7px 10px; border-radius:2px;
-            background:var(--panel); }
 
   /* Control buttons — the only interactive HUD elements (pointer-events:auto).
      44px tap targets, stacked in the top-right corner. */
@@ -140,13 +162,11 @@
   body.hud-hidden #hud-btn .ic-eyeoff { display:block; }
 
   /* the text overlay fades out together when hidden (buttons stay) */
-  #chip, #readout, #caption, #notice, #controls { transition:opacity .25s ease; }
+  #chip, #dock { transition:opacity .25s ease; }
   body.hud-hidden #chip,
-  body.hud-hidden #readout,
-  body.hud-hidden #caption,
-  body.hud-hidden #notice,
-  body.hud-hidden #controls,
+  body.hud-hidden #dock,
   body.hud-hidden #debug { opacity:0; }
+  body.hud-hidden #timeline { pointer-events:none; }   /* not scrubbable while hidden */
 
   #debug { position:fixed; left:calc(var(--safe-l) + var(--edge)); top:calc(var(--safe-t) + 56px);
            font-size:10.5px; color:var(--solid); line-height:1.5; display:none;
@@ -157,14 +177,11 @@
            padding:max(32px, var(--safe-t)) max(24px, var(--safe-r)) max(32px, var(--safe-b)) max(24px, var(--safe-l));
            text-align:center; font-size:13px; color:#ff9a9a; background:var(--bg); }
 
-  /* ≥640px: roomier desktop layout, keyboard hints, dev notice visible */
+  /* ≥640px: roomier desktop layout, keyboard hints */
   @media (min-width:640px) {
     :root { --edge:22px; }
-    #caption   { bottom:calc(var(--safe-b) + 64px); }
-    /* sit the dev notice below the fullscreen button (top-right stack) */
-    #notice    { display:block; top:calc(var(--safe-t) + var(--edge) + 56px); }
     .touch-only{ display:none;  }
-    .kbd-only  { display:block; }
+    .kbd-only  { display:inline; }
   }
 </style>
 </head>
@@ -172,16 +189,12 @@
   <canvas id="gl"></canvas>
   <div id="vignette"></div>
 
-  <!-- HUD (populated by the HUD sink; structure is a stub for step 3) -->
-  <div id="chip" class="hud"><span class="dot"></span><span id="chip-label">—</span></div>
-  <div id="readout" class="hud">
-    <div class="label">AEON</div>
-    <div class="row"><span class="k">phase</span><span class="v" id="r-phase">—</span></div>
-    <div class="row"><span class="k">aeon</span><span class="v" id="r-aeon">—</span></div>
-    <div class="row"><span class="k">depth</span><span class="v" id="r-depth">—</span></div>
-    <div class="row"><span class="k">Δ</span><span class="v" id="r-delta">—</span></div>
+  <!-- HUD — scientific-instrument readout, driven by the HUD sink off the clock -->
+  <div id="chip" class="hud">
+    <span class="dot"></span>
+    <span id="chip-label">—</span>
+    <span id="chip-conf">—</span>
   </div>
-  <div id="caption" class="hud">—</div>
 
   <!-- Control buttons (the only interactive HUD elements). Icons swap via body
        classes. fs-btn hidden via body.no-fs where there's no Fullscreen API. -->
@@ -204,10 +217,24 @@
       <path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5" /></svg>
   </button>
 
-  <div id="notice">step 2 · phase-driven morph<br>smooth → crystal → collapse</div>
-  <div id="controls" class="hud">
-    <span class="touch-only">tap · play/pause<br>drag · scrub</span>
-    <span class="kbd-only">space · play/pause<br>← → · scrub<br>h · text &nbsp; f · fullscreen<br>?phase=0.42 · jump &nbsp; ?debug</span>
+  <!-- bottom dock: caption · stage timeline (scrubbable) · stat readout · hint -->
+  <div id="dock" class="hud">
+    <div id="caption">—</div>
+    <div id="timeline" aria-hidden="true">
+      <div id="tl-track"></div>
+      <div id="tl-head"></div>
+    </div>
+    <div id="stats">
+      <div class="stat"><span class="sk">phase</span><span class="sv" id="r-phase">—</span></div>
+      <div class="stat"><span class="sk">aeon</span><span class="sv" id="r-aeon">—</span></div>
+      <div class="stat"><span class="sk">depth</span><span class="sv" id="r-depth">—</span></div>
+      <div class="stat"><span class="sk">Δ</span><span class="sv" id="r-delta">—</span></div>
+      <div class="stat state"><span class="sv" id="r-state">▸ running</span></div>
+    </div>
+    <div id="hint">
+      <span class="touch-only">tap · play/pause &nbsp;·&nbsp; drag · scrub</span>
+      <span class="kbd-only">space play/pause &nbsp;·&nbsp; ← → scrub &nbsp;·&nbsp; h text &nbsp;·&nbsp; f fullscreen &nbsp;·&nbsp; ?phase= jump &nbsp;·&nbsp; ?debug</span>
+    </div>
   </div>
   <div id="debug"></div>
   <div id="fatal"></div>
@@ -332,6 +359,7 @@ const Clock = {
   },
   toggle(){ this.playing = !this.playing; },
   scrub(d){ this.playing = false; this.phase = ((this.phase + d)%1 + 1)%1; },
+  seek(p){ this.playing = false; this.phase = ((p%1)+1)%1; },   // absolute (timeline scrub)
 };
 
 /* ============================================================================
@@ -516,27 +544,57 @@ const GPU = (() => {
 })();
 
 /* ============================================================================
-   6. HUD sink — same state; diffed DOM, text throttled ~10 Hz. (Shell = step 3.)
+   6. HUD sink — scientific-instrument readout. Reads `phase`/`stage` off the
+      shared state. Playhead moves every frame (cheap); text is diffed and
+      throttled ~10 Hz so the DOM isn't rewritten on frames where nothing changed.
    ============================================================================ */
 const HUD = (() => {
   const el = {}; let lastText = 0, cache = {};
   function init(){
-    ["r-phase","r-aeon","r-depth","r-delta","caption","chip-label"].forEach(id => el[id] = document.getElementById(id));
-    el.chipDot = document.querySelector("#chip .dot");
+    ["r-phase","r-aeon","r-depth","r-delta","caption","chip-label","chip-conf","r-state",
+     "tl-track","tl-head"].forEach(id => el[id] = document.getElementById(id));
+    el.chip = document.getElementById("chip");
     el["r-delta"].textContent = CONFIG.DELTA.toFixed(2);
+
+    // build the stage timeline once, from TIMELINE (the honesty layer as data)
+    el.segs = TIMELINE.map(s => {
+      const seg = document.createElement("div");
+      seg.className = "tl-seg c-" + s.confidence;
+      seg.style.left  = (s.phaseStart * 100) + "%";
+      seg.style.width = ((s.phaseEnd - s.phaseStart) * 100) + "%";
+      el["tl-track"].appendChild(seg);
+      return seg;
+    });
   }
   function set(id, val){ if (cache[id] !== val){ cache[id] = val; el[id].textContent = val; } }
-  function update(state, now){
-    if (now - lastText < 100) return;          // ~10 Hz text
+  function update(state, now, playing){
+    // playhead every frame — smooth, just one style write
+    el["tl-head"].style.left = (state.phase * 100) + "%";
+
+    if (now - lastText < 100) return;          // ~10 Hz for the diffed text
     lastText = now;
     set("r-phase", state.phase.toFixed(3));
     set("r-aeon", String(state.aeonCount));
     set("r-depth", state.logDepth.toFixed(2));
+    set("r-state", playing ? "▸ running" : "‖ paused");
+
     const s = state.stage;
-    set("chip-label", `${s.label} · ${s.confidence}`);
+    set("chip-label", s.label);
+    set("chip-conf", s.confidence);
     set("caption", s.caption);
-    const c = CONFIG.confidenceColors[s.confidence];
-    if (cache.dot !== c){ cache.dot = c; el.chipDot.style.color = c; }
+
+    // confidence drives the single accent (CSS var via data attribute) + active segment
+    if (cache.conf !== s.confidence){
+      cache.conf = s.confidence;
+      el.chip.dataset.conf = s.confidence;
+      document.body.dataset.conf = s.confidence;   // --accent for dock/state
+    }
+    const idx = TIMELINE.indexOf(s);
+    if (cache.seg !== idx){
+      if (cache.seg != null && el.segs[cache.seg]) el.segs[cache.seg].classList.remove("on");
+      if (el.segs[idx]) el.segs[idx].classList.add("on");
+      cache.seg = idx;
+    }
   }
   return { init, update };
 })();
@@ -646,6 +704,22 @@ function main(){
   canvas.addEventListener("pointerup", endPtr);
   canvas.addEventListener("pointercancel", endPtr);
 
+  // Timeline scrubbing — drag (or click) anywhere on the strip to seek that phase.
+  const timeline = document.getElementById("timeline");
+  let tlActive = false;
+  function seekFromEvent(e){
+    const rect = timeline.getBoundingClientRect();
+    Clock.seek((e.clientX - rect.left) / rect.width);
+  }
+  timeline.addEventListener("pointerdown", e => {
+    tlActive = true; seekFromEvent(e);
+    if (timeline.setPointerCapture) timeline.setPointerCapture(e.pointerId);
+  });
+  timeline.addEventListener("pointermove", e => { if (tlActive) seekFromEvent(e); });
+  const endTl = () => { tlActive = false; };
+  timeline.addEventListener("pointerup", endTl);
+  timeline.addEventListener("pointercancel", endTl);
+
   document.addEventListener("visibilitychange", () => { if (document.hidden) Clock.playing = false; });
 
   // survive context loss
@@ -656,8 +730,8 @@ function main(){
     Clock.advance(dt);
     GPU.resize(canvas);
     const state = derive(Clock.phase, Clock.logDepth, Clock.aeonCount);  // PURE
-    GPU.render(state);          // sink 1
-    HUD.update(state, now);     // sink 2
+    GPU.render(state);                    // sink 1
+    HUD.update(state, now, Clock.playing); // sink 2
     debugText(state);
     requestAnimationFrame(frame);
   }
