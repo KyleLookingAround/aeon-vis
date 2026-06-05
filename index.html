@@ -111,22 +111,42 @@
             border:1px solid var(--hairline); padding:7px 10px; border-radius:2px;
             background:var(--panel); }
 
-  /* Fullscreen toggle — the one interactive HUD element (pointer-events:auto).
-     44px tap target; icon swaps via body.fs; hidden where the platform has no
+  /* Control buttons — the only interactive HUD elements (pointer-events:auto).
+     44px tap targets, stacked in the top-right corner. */
+  .ctl-btn { position:fixed; top:calc(var(--safe-t) + var(--edge));
+             width:44px; height:44px; display:grid; place-items:center; padding:0;
+             border:1px solid var(--hairline); border-radius:6px; background:var(--panel);
+             color:var(--ink-dim); cursor:pointer; pointer-events:auto;
+             -webkit-backdrop-filter:blur(6px); backdrop-filter:blur(6px);
+             transition:color .15s ease, border-color .15s ease; }
+  .ctl-btn:hover, .ctl-btn:active { color:var(--ink); border-color:rgba(160,180,210,0.32); }
+  .ctl-btn:focus-visible { outline:1px solid var(--solid); outline-offset:2px; }
+  .ctl-btn svg { width:20px; height:20px; display:block; }
+
+  /* fullscreen (rightmost); icon swaps via body.fs; hidden where there's no
      Fullscreen API (body.no-fs, e.g. iPhone Safari). */
-  #fs-btn { position:fixed; top:calc(var(--safe-t) + var(--edge)); right:calc(var(--safe-r) + var(--edge));
-            width:44px; height:44px; display:grid; place-items:center; padding:0;
-            border:1px solid var(--hairline); border-radius:6px; background:var(--panel);
-            color:var(--ink-dim); cursor:pointer; pointer-events:auto;
-            -webkit-backdrop-filter:blur(6px); backdrop-filter:blur(6px);
-            transition:color .15s ease, border-color .15s ease; }
-  #fs-btn:hover, #fs-btn:active { color:var(--ink); border-color:rgba(160,180,210,0.32); }
-  #fs-btn:focus-visible { outline:1px solid var(--solid); outline-offset:2px; }
-  #fs-btn svg { width:20px; height:20px; display:block; }
+  #fs-btn  { right:calc(var(--safe-r) + var(--edge)); }
   #fs-btn .ic-exit { display:none; }
   body.fs #fs-btn .ic-enter { display:none; }
   body.fs #fs-btn .ic-exit  { display:block; }
   body.no-fs #fs-btn { display:none; }
+
+  /* show/hide text (left of fullscreen); eye ↔ eye-off via body.hud-hidden.
+     Slides to the rightmost slot when the fullscreen button is absent. */
+  #hud-btn { right:calc(var(--safe-r) + var(--edge) + 52px); }
+  body.no-fs #hud-btn { right:calc(var(--safe-r) + var(--edge)); }
+  #hud-btn .ic-eyeoff { display:none; }
+  body.hud-hidden #hud-btn .ic-eye    { display:none; }
+  body.hud-hidden #hud-btn .ic-eyeoff { display:block; }
+
+  /* the text overlay fades out together when hidden (buttons stay) */
+  #chip, #readout, #caption, #notice, #controls { transition:opacity .25s ease; }
+  body.hud-hidden #chip,
+  body.hud-hidden #readout,
+  body.hud-hidden #caption,
+  body.hud-hidden #notice,
+  body.hud-hidden #controls,
+  body.hud-hidden #debug { opacity:0; }
 
   #debug { position:fixed; left:calc(var(--safe-l) + var(--edge)); top:calc(var(--safe-t) + 56px);
            font-size:10.5px; color:var(--solid); line-height:1.5; display:none;
@@ -163,9 +183,19 @@
   </div>
   <div id="caption" class="hud">—</div>
 
-  <!-- Fullscreen toggle (the only interactive HUD element). Two icons; CSS swaps
-       them on body.fs. Hidden via body.no-fs where there's no Fullscreen API. -->
-  <button id="fs-btn" type="button" aria-label="Toggle fullscreen" title="Fullscreen (f)">
+  <!-- Control buttons (the only interactive HUD elements). Icons swap via body
+       classes. fs-btn hidden via body.no-fs where there's no Fullscreen API. -->
+  <button id="hud-btn" class="ctl-btn" type="button" aria-label="Show/hide text" title="Show/hide text (h)">
+    <svg class="ic-eye" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+         stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <path d="M2 12s3.6-6.5 10-6.5S22 12 22 12s-3.6 6.5-10 6.5S2 12 2 12z" />
+      <circle cx="12" cy="12" r="2.6" /></svg>
+    <svg class="ic-eyeoff" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+         stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <path d="M2 12s3.6-6.5 10-6.5S22 12 22 12s-3.6 6.5-10 6.5S2 12 2 12z" />
+      <line x1="4" y1="4" x2="20" y2="20" /></svg>
+  </button>
+  <button id="fs-btn" class="ctl-btn" type="button" aria-label="Toggle fullscreen" title="Fullscreen (f)">
     <svg class="ic-enter" viewBox="0 0 24 24" fill="none" stroke="currentColor"
          stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
       <path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" /></svg>
@@ -177,7 +207,7 @@
   <div id="notice">step 2 · phase-driven morph<br>smooth → crystal → collapse</div>
   <div id="controls" class="hud">
     <span class="touch-only">tap · play/pause<br>drag · scrub</span>
-    <span class="kbd-only">space · play/pause<br>← → · scrub<br>f · fullscreen<br>?phase=0.42 · jump &nbsp; ?debug</span>
+    <span class="kbd-only">space · play/pause<br>← → · scrub<br>h · text &nbsp; f · fullscreen<br>?phase=0.42 · jump &nbsp; ?debug</span>
   </div>
   <div id="debug"></div>
   <div id="fatal"></div>
@@ -568,12 +598,21 @@ function main(){
   document.addEventListener("fullscreenchange", syncFullscreen);
   document.addEventListener("webkitfullscreenchange", syncFullscreen);
 
+  // Show/hide the text overlay (HUD) for a clean, immersive view. Buttons stay.
+  const hudBtn = document.getElementById("hud-btn");
+  function toggleHud(){
+    const hidden = document.body.classList.toggle("hud-hidden");
+    hudBtn.setAttribute("aria-pressed", String(hidden));
+  }
+  hudBtn.addEventListener("click", toggleHud);
+
   let last = performance.now();
   document.addEventListener("keydown", e => {
     if (e.code === "Space"){ e.preventDefault(); Clock.toggle(); }
     if (e.code === "ArrowRight") Clock.scrub(+CONFIG.keyScrub);
     if (e.code === "ArrowLeft")  Clock.scrub(-CONFIG.keyScrub);
     if (e.code === "KeyF"){ e.preventDefault(); toggleFullscreen(); }
+    if (e.code === "KeyH"){ e.preventDefault(); toggleHud(); }
   });
 
   // Touch / pointer input (covers mouse, touch and pen via Pointer Events):
