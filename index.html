@@ -101,7 +101,7 @@
     <div class="row"><span class="k">Δ</span><span class="v" id="r-delta">—</span></div>
   </div>
   <div id="caption" class="hud">—</div>
-  <div id="notice">scaffold · placeholder shader<br>step 1 replaces the zoom</div>
+  <div id="notice">step 1 · seamless log-zoom<br>static self-similar field</div>
   <div id="controls" class="hud">space · play/pause<br>← → · scrub<br>?phase=0.42 · jump &nbsp; ?debug</div>
   <div id="debug"></div>
   <div id="fatal"></div>
@@ -219,26 +219,86 @@ const GPU = (() => {
     attribute vec2 aPos;
     void main(){ gl_Position = vec4(aPos, 0.0, 1.0); }`;
 
-  // PLACEHOLDER shader: proves the clock→uniform→render path and models the
-  // invariant (its only phase term is periodic, so the wrap is already seamless).
-  // STEP 1: replace with the complex-log seamless infinite zoom over a static field.
+  // STEP 1 — seamless infinite log-zoom over a STATIC self-similar field.
+  //
+  // Idea (PLAN §4.5): in log-polar coords, build a field that is EXACTLY periodic
+  // in the log-radius with period Δ, then offset its radial coordinate by phase.
+  // Advancing phase by 1 shifts the radial sample by exactly one period → the field
+  // is identical → phase=1 ≡ phase=0 by construction, not by tuning.
+  //
+  // The shader's ONLY zoom driver is u_phase. u_time touches cosmetic grain only.
   const FRAG = `
     precision highp float;
     uniform vec2  u_resolution;
-    uniform float u_phase;        // [0,1) — the ONLY thing allowed to drive appearance
-    uniform float u_criticality;
+    uniform float u_phase;        // [0,1) — the ONLY thing allowed to drive the zoom
+    uniform float u_delta;        // Δ echo period (one octave = one period in log-r)
     uniform float u_time;         // COSMETIC ONLY — must never drive the zoom/seam
+
+    #define TAU 6.28318530718
+
+    // cheap hash → [0,1)
+    float hash(vec2 p){
+      p = fract(p * vec2(127.1, 311.7));
+      p += dot(p, p + 34.56);
+      return fract(p.x * p.y * 0.5 + 0.5);
+    }
+
+    // value noise tiled seamlessly on a period×period torus (both axes wrap)
+    float pnoise(vec2 x, float period){
+      vec2 i = floor(x), f = fract(x);
+      f = f*f*(3.0 - 2.0*f);
+      float a = hash(mod(i,               vec2(period)));
+      float b = hash(mod(i+vec2(1.0,0.0), vec2(period)));
+      float c = hash(mod(i+vec2(0.0,1.0), vec2(period)));
+      float d = hash(mod(i+vec2(1.0,1.0), vec2(period)));
+      return mix(mix(a,b,f.x), mix(c,d,f.x), f.y);
+    }
+
     void main(){
       vec2 uv = (gl_FragCoord.xy - 0.5*u_resolution) / u_resolution.y;
-      float r = length(uv);
-      float pulse = 0.5 - 0.5*cos(6.2831853*u_phase);     // periodic 0→1→0 (seam-safe)
-      vec3 base = mix(vec3(0.015,0.02,0.035), vec3(0.04,0.07,0.11), pulse);
-      float ring = smoothstep(0.012, 0.0, abs(r - 0.34));  // instrument reticle
-      base += ring * vec3(0.30,0.62,0.92) * 0.45;
-      float grain = fract(sin(dot(gl_FragCoord.xy, vec2(12.99,78.23)) + u_time*0.5) * 43758.5);
-      base += (grain - 0.5) * 0.012;                       // faint cosmetic grain (allowed)
-      base += u_criticality * 0.04;
-      gl_FragColor = vec4(base, 1.0);
+      float r   = max(length(uv), 1e-4);
+      float ang = atan(uv.y, uv.x);            // [-π,π]
+
+      // log-polar coordinates
+      float u = log(r) / u_delta + 0.5;        // radius in echo periods (Δ ↔ 1 unit)
+      float v = ang / TAU + 0.5;               // angle in [0,1); torus wraps the seam
+
+      // zoom-IN: subtract phase so features expand outward and new detail emerges
+      // from the centre (the camera falls inward forever).
+      float z = u - u_phase;
+
+      // self-similar field: a few octaves, each EXACTLY 1-periodic in phase.
+      float field = 0.0, amp = 0.5, sum = 0.0;
+      for (int k = 0; k < 4; k++){
+        float N = pow(2.0, float(k) + 1.0);    // 2, 4, 8, 16 cells per period
+        // anti-alias: fade an octave near the centre where its rings go sub-pixel
+        float aa = smoothstep(0.0, 0.30, r * N * 0.30);
+        vec2 p = vec2(z * N, v * N);
+        field += amp * aa * (pnoise(p, N) - 0.5);
+        sum   += amp;
+        amp   *= 0.55;
+      }
+      field = clamp(field / sum + 0.5, 0.0, 1.0);
+
+      // tone-map into a dark observatory palette
+      vec3 lo  = vec3(0.015, 0.022, 0.038);
+      vec3 hi  = vec3(0.10,  0.16,  0.26);
+      vec3 col = mix(lo, hi, field);
+
+      // faint echo-shell hairlines at each Δ boundary — pure self-similar structure,
+      // periodic in phase, so it cannot tear the seam.
+      float shell = fract(z);
+      float line  = smoothstep(0.0, 0.035, shell) * smoothstep(0.0, 0.035, 1.0 - shell);
+      col += (1.0 - line) * vec3(0.05, 0.10, 0.16) * smoothstep(0.0, 0.15, r);
+
+      // calm core: fade to base toward the centre (the point we fall into)
+      col = mix(lo, col, smoothstep(0.0, 0.05, r));
+
+      // faint cosmetic grain (allowed — does not touch the zoom/seam)
+      float g = hash(gl_FragCoord.xy + fract(u_time));
+      col += (g - 0.5) * 0.010;
+
+      gl_FragColor = vec4(col, 1.0);
     }`;
 
   function compile(type, src){
@@ -269,9 +329,10 @@ const GPU = (() => {
     u = {
       resolution:  gl.getUniformLocation(prog, "u_resolution"),
       phase:       gl.getUniformLocation(prog, "u_phase"),
-      criticality: gl.getUniformLocation(prog, "u_criticality"),
+      delta:       gl.getUniformLocation(prog, "u_delta"),
       time:        gl.getUniformLocation(prog, "u_time"),
     };
+    gl.uniform1f(u.delta, CONFIG.DELTA);   // Δ is constant; set once
     started = performance.now();
   }
   function resize(canvas){
@@ -283,8 +344,7 @@ const GPU = (() => {
   // uniform-adapter: DerivedState → uniforms (extend HERE as the shader grows)
   function render(state){
     gl.uniform2f(u.resolution, gl.drawingBufferWidth, gl.drawingBufferHeight);
-    gl.uniform1f(u.phase, state.phase);
-    gl.uniform1f(u.criticality, state.criticality);
+    gl.uniform1f(u.phase, state.phase);   // [0,1) — the only zoom driver
     gl.uniform1f(u.time, (performance.now() - started) / 1000);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
   }
