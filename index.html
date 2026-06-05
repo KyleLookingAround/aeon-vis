@@ -110,6 +110,25 @@
   #ck-dot  { fill:var(--accent, var(--solid)); }
   #choptuik text { fill:var(--ink-dim); font-size:7px; letter-spacing:0.04em; }
 
+  /* Penrose CCC inset (top-right, under the control bar); aeon mode only */
+  #penrose { right:calc(var(--safe-r) + var(--edge)); top:calc(var(--safe-t) + var(--edge) + 58px);
+             width:clamp(54px, 16vw, 66px); opacity:0.9; }
+  #penrose .cap { font-size:clamp(6.5px,1.8vw,8px); color:var(--ink-dim); text-transform:uppercase;
+                  letter-spacing:0.04em; margin-bottom:2px; text-align:right; }
+  #penrose svg { width:100%; height:auto; display:block; }
+  .aeon  { fill:none; stroke:var(--hairline); stroke-width:1; }
+  .aeon.cur { stroke:var(--accent, var(--solid)); }
+  .xover { fill:none; stroke:var(--ink-dim); stroke-width:0.8; opacity:0.6; }
+  #pen-dot { fill:var(--accent, var(--solid)); }
+  #penrose text { fill:var(--ink-dim); font-size:6.5px; letter-spacing:0.04em; }
+  body.web #penrose { display:none; }
+
+  /* scale ruler line in the dock */
+  #scale { text-align:center; font-size:clamp(9px,2.5vw,11px); }
+  #scale .sk { color:var(--ink-dim); letter-spacing:0.12em; text-transform:uppercase; font-size:0.85em; }
+  #scale .sv { color:var(--ink); font-variant-numeric:tabular-nums; }
+  #scale .rg { color:var(--ink-dim); }
+
   /* bottom dock — caption, stage timeline, stat readout, hint (centered column) */
   #dock { position:fixed; left:50%; transform:translateX(-50%);
           bottom:calc(var(--safe-b) + var(--edge)); z-index:2;
@@ -182,10 +201,11 @@
   body.hud-hidden #hud-btn .ic-eyeoff { display:block; }
 
   /* the text overlay fades out together when hidden (buttons stay) */
-  #chip, #dock { transition:opacity .25s ease; }
+  #chip, #dock, #penrose { transition:opacity .25s ease; }
   body.hud-hidden #chip,
   body.hud-hidden #dock,
   body.hud-hidden #choptuik,
+  body.hud-hidden #penrose,
   body.hud-hidden #debug { opacity:0; }
   body.hud-hidden #timeline { pointer-events:none; }   /* not scrubbable while hidden */
 
@@ -231,6 +251,23 @@
     </svg>
   </div>
 
+  <!-- Penrose CCC inset: conformal aeons stacked in time. A marker rises through
+       the current aeon (Big Bang at the bottom → crossover at the top), then resets
+       to the next band at the wrap. Aeon mode only. -->
+  <div id="penrose" class="hud">
+    <div class="cap">CCC · conformal aeons</div>
+    <svg viewBox="0 0 64 96" aria-hidden="true">
+      <rect class="aeon"     x="7" y="64" width="50" height="26" />
+      <rect class="aeon cur" x="7" y="35" width="50" height="26" />
+      <rect class="aeon"     x="7" y="6"  width="50" height="26" />
+      <path class="xover" d="M7 64 Q 20 60.5 32 64 T 57 64" />
+      <path class="xover" d="M7 35 Q 20 31.5 32 35 T 57 35" />
+      <circle id="pen-dot" cx="32" cy="61" r="2.6" />
+      <text x="57" y="17" text-anchor="end">next</text>
+      <text x="7"  y="87">prev</text>
+    </svg>
+  </div>
+
   <!-- Control buttons (the only interactive HUD elements), in a right-aligned
        flex bar. Icons swap via body classes; fs-btn collapses out where there's
        no Fullscreen API. Order (left→right): mode · text · fullscreen. -->
@@ -269,6 +306,7 @@
       <div id="tl-track"></div>
       <div id="tl-head"></div>
     </div>
+    <div id="scale"><span class="sk">scale</span> <span class="sv" id="r-scale">—</span> <span class="rg" id="r-regime">—</span></div>
     <div id="stats">
       <div class="stat"><span class="sk">phase</span><span class="sv" id="r-phase">—</span></div>
       <div class="stat"><span class="sk">aeon</span><span class="sv" id="r-aeon">—</span></div>
@@ -997,14 +1035,31 @@ const GPU = (() => {
       shared state. Playhead moves every frame (cheap); text is diffed and
       throttled ~10 Hz so the DOM isn't rewritten on frames where nothing changed.
    ============================================================================ */
+// Physical scale at a given zoom depth (illustrative). L = exp(±logDepth) metres,
+// anchored at 1 m; zoom-in shrinks toward the Planck length, zoom-out grows to the
+// cosmic horizon. Returns a "1.2e-15 m" string and a named regime.
+function scaleReadout(logDepth, isWeb){
+  const g = (isWeb ? 1 : -1) * logDepth * 0.43429448;   // log10(L)
+  const e = Math.floor(g);
+  const num = `${Math.pow(10, g - e).toFixed(1)}e${e} m`;
+  const rg = isWeb
+    ? (g<9?"planetary":g<13?"stellar":g<16?"interstellar":g<19?"stellar neighbourhood":
+       g<22?"galactic":g<24?"clusters":g<26.94?"cosmic web":"beyond the horizon")
+    : (g>0?"macroscopic":g>-3?"human–mm":g>-6?"cellular":g>-9?"molecular":
+       g>-10.3?"atomic":g>-14?"sub-atomic":g>-15.3?"nuclear":g>-18?"quark scale":
+       g>-35?"pre-geometric":"sub-Planckian");
+  return { num, rg };
+}
+
 const HUD = (() => {
   const el = {}; let lastText = 0, cache = {};
   function init(){
-    ["r-phase","r-aeon","r-depth","r-delta","caption","chip-label","chip-conf","r-state",
-     "tl-track","tl-head"].forEach(id => el[id] = document.getElementById(id));
+    ["r-phase","r-aeon","r-depth","r-delta","r-scale","r-regime","caption","chip-label","chip-conf",
+     "r-state","tl-track","tl-head"].forEach(id => el[id] = document.getElementById(id));
     el.chip = document.getElementById("chip");
     el.choptuik = document.getElementById("choptuik");
     el.ckDot = document.getElementById("ck-dot");
+    el.penDot = document.getElementById("pen-dot");
     el["r-delta"].textContent = CONFIG.DELTA.toFixed(2);
 
     // build BOTH stage timelines once (honesty layer as data). CSS shows the set
@@ -1032,6 +1087,15 @@ const HUD = (() => {
     set("r-aeon", String(state.aeonCount));
     set("r-depth", state.logDepth.toFixed(2));
     set("r-state", playing ? "▸ running" : "‖ paused");
+
+    // scale ruler — physical scale at this zoom depth, and its regime
+    const sc = scaleReadout(state.logDepth, web > 0.5);
+    set("r-scale", sc.num);
+    set("r-regime", "· " + sc.rg);
+
+    // Penrose CCC inset — the marker rises through the current aeon (Big Bang at the
+    // bottom, crossover at the top). Hidden in cosmic-web mode via CSS.
+    if (web <= 0.5) el.penDot.setAttribute("cy", (61 - state.phase * 26).toFixed(1));
 
     // pick the timeline for the current mode; each has its own stages + segments
     const isWeb = web > 0.5;
