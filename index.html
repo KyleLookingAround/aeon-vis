@@ -274,6 +274,9 @@ const CONFIG = {
   // Black hole presence (collapse → evaporation). Drives gravitational lensing
   // (Einstein ring + shadow) and the accretion disk. bump → 0 at the seam.
   bh: { a:0.42, peak:0.64, b:0.90, lensAmp:0.034 },   // lensAmp = max Einstein radius² (screen units)
+  // Post-processing (bloom + ACES tonemap). Bloom is a pure function of the
+  // seam-safe scene image, so it can't affect the loop.
+  post: { bloomThreshold:0.62, bloomStrength:0.95, bloomScale:0.5 },  // scale = bloom-buffer res factor
   confidenceColors: {     // mirror of CSS vars (single source for JS-side use)
     solid: "#5fd0c8", contested: "#e3b56b", interpretive: "#b48cf0",
   },
@@ -403,7 +406,7 @@ const Clock = {
       >>> STEP 1 replaces the placeholder fragment shader with the seamless zoom. <<<
    ============================================================================ */
 const GPU = (() => {
-  let gl, prog, u = {}, started = 0;
+  let gl, u = {}, started = 0;
 
   const VERT = `
     attribute vec2 aPos;
@@ -577,56 +580,161 @@ const GPU = (() => {
       gl_FragColor = vec4(col, 1.0);
     }`;
 
+  // ---- post-processing: bright-pass + separable Gaussian blur, then composite ----
+  // Bloom is a pure function of the scene image; since the scene is seam-safe,
+  // the post chain is too. RGBA8 targets (no float-texture extension needed).
+  const BLUR = `
+    precision highp float;
+    uniform sampler2D u_tex;
+    uniform vec2  u_res;       // target resolution
+    uniform vec2  u_step;      // blur offset in uv per tap
+    uniform float u_thresh;    // >0: bright-pass extraction (first/H pass)
+    vec3 samp(vec2 uv){
+      vec3 c = texture2D(u_tex, uv).rgb;
+      if (u_thresh > 0.0){
+        float l = max(max(c.r, c.g), c.b);
+        c *= smoothstep(u_thresh, u_thresh + 0.35, l);
+      }
+      return c;
+    }
+    void main(){
+      vec2 uv = gl_FragCoord.xy / u_res;
+      vec3 s = samp(uv) * 0.227027;
+      s += (samp(uv + u_step      ) + samp(uv - u_step      )) * 0.194594;
+      s += (samp(uv + u_step*2.0  ) + samp(uv - u_step*2.0  )) * 0.121622;
+      s += (samp(uv + u_step*3.0  ) + samp(uv - u_step*3.0  )) * 0.054054;
+      s += (samp(uv + u_step*4.0  ) + samp(uv - u_step*4.0  )) * 0.016216;
+      gl_FragColor = vec4(s, 1.0);
+    }`;
+
+  const COMP = `
+    precision highp float;
+    uniform sampler2D u_scene;
+    uniform sampler2D u_bloom;
+    uniform vec2  u_res;
+    uniform float u_strength;
+    // ACES filmic tonemap (Narkowicz approximation)
+    vec3 aces(vec3 x){ return clamp((x*(2.51*x+0.03))/(x*(2.43*x+0.59)+0.14), 0.0, 1.0); }
+    void main(){
+      vec2 uv = gl_FragCoord.xy / u_res;
+      // subtle, constant chromatic aberration toward the edges (phase-independent → seam-safe)
+      vec2 d = uv - 0.5;
+      float ca = dot(d, d) * 0.006;
+      vec3 scene = vec3(
+        texture2D(u_scene, uv + d*ca).r,
+        texture2D(u_scene, uv).g,
+        texture2D(u_scene, uv - d*ca).b);
+      vec3 bloom = texture2D(u_bloom, uv).rgb;
+      gl_FragColor = vec4(aces(scene + bloom * u_strength), 1.0);
+    }`;
+
   function compile(type, src){
     const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s);
     if (!gl.getShaderParameter(s, gl.COMPILE_STATUS))
       throw new Error("shader compile: " + gl.getShaderInfoLog(s));
     return s;
   }
+  function link(vsrc, fsrc){
+    const p = gl.createProgram();
+    gl.attachShader(p, compile(gl.VERTEX_SHADER, vsrc));
+    gl.attachShader(p, compile(gl.FRAGMENT_SHADER, fsrc));
+    gl.linkProgram(p);
+    if (!gl.getProgramParameter(p, gl.LINK_STATUS))
+      throw new Error("program link: " + gl.getProgramInfoLog(p));
+    return p;
+  }
+
+  let sceneProg, blurProg, compProg, bu = {}, cu = {}, quad;
+  let aScene = 0, aBlur = 0, aComp = 0;
+  // render targets {tex, fbo, w, h}
+  let scene = null, bloomA = null, bloomB = null, W = 0, H = 0;
+
+  function makeTarget(w, h){
+    const tex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    const fbo = gl.createFramebuffer();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+    return { tex, fbo, w, h };
+  }
+  function disposeTarget(t){ if (t){ gl.deleteTexture(t.tex); gl.deleteFramebuffer(t.fbo); } }
+
   function init(canvas){
     gl = canvas.getContext("webgl") || canvas.getContext("experimental-webgl");
     if (!gl) throw new Error("WebGL unavailable");
-    prog = gl.createProgram();
-    gl.attachShader(prog, compile(gl.VERTEX_SHADER, VERT));
-    gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, FRAG));
-    gl.linkProgram(prog);
-    if (!gl.getProgramParameter(prog, gl.LINK_STATUS))
-      throw new Error("program link: " + gl.getProgramInfoLog(prog));
-    gl.useProgram(prog);
 
-    // fullscreen triangle (3 verts, covers clip space; no diagonal seam)
-    const buf = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+    sceneProg = link(VERT, FRAG);
+    blurProg  = link(VERT, BLUR);
+    compProg  = link(VERT, COMP);
+    aScene = gl.getAttribLocation(sceneProg, "aPos");
+    aBlur  = gl.getAttribLocation(blurProg,  "aPos");
+    aComp  = gl.getAttribLocation(compProg,  "aPos");
+
+    // fullscreen triangle (covers clip space; no diagonal seam)
+    quad = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, quad);
     gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 3,-1, -1,3]), gl.STATIC_DRAW);
-    const loc = gl.getAttribLocation(prog, "aPos");
-    gl.enableVertexAttribArray(loc);
-    gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
 
     u = {
-      resolution:  gl.getUniformLocation(prog, "u_resolution"),
-      phase:       gl.getUniformLocation(prog, "u_phase"),
-      delta:       gl.getUniformLocation(prog, "u_delta"),
-      criticality: gl.getUniformLocation(prog, "u_criticality"),
-      fork:        gl.getUniformLocation(prog, "u_fork"),
-      volume:      gl.getUniformLocation(prog, "u_volume"),
-      shear:       gl.getUniformLocation(prog, "u_shear"),
-      bloom:       gl.getUniformLocation(prog, "u_bloom"),
-      lens:        gl.getUniformLocation(prog, "u_lens"),
-      bh:          gl.getUniformLocation(prog, "u_bh"),
-      time:        gl.getUniformLocation(prog, "u_time"),
+      resolution:  gl.getUniformLocation(sceneProg, "u_resolution"),
+      phase:       gl.getUniformLocation(sceneProg, "u_phase"),
+      delta:       gl.getUniformLocation(sceneProg, "u_delta"),
+      criticality: gl.getUniformLocation(sceneProg, "u_criticality"),
+      fork:        gl.getUniformLocation(sceneProg, "u_fork"),
+      volume:      gl.getUniformLocation(sceneProg, "u_volume"),
+      shear:       gl.getUniformLocation(sceneProg, "u_shear"),
+      bloom:       gl.getUniformLocation(sceneProg, "u_bloom"),
+      lens:        gl.getUniformLocation(sceneProg, "u_lens"),
+      bh:          gl.getUniformLocation(sceneProg, "u_bh"),
+      time:        gl.getUniformLocation(sceneProg, "u_time"),
     };
+    bu = { tex: gl.getUniformLocation(blurProg, "u_tex"), res: gl.getUniformLocation(blurProg, "u_res"),
+           step: gl.getUniformLocation(blurProg, "u_step"), thresh: gl.getUniformLocation(blurProg, "u_thresh") };
+    cu = { scene: gl.getUniformLocation(compProg, "u_scene"), bloom: gl.getUniformLocation(compProg, "u_bloom"),
+           res: gl.getUniformLocation(compProg, "u_res"), strength: gl.getUniformLocation(compProg, "u_strength") };
+
+    gl.useProgram(sceneProg);
     gl.uniform1f(u.delta, CONFIG.DELTA);   // Δ is constant; set once
     started = performance.now();
   }
+
   function resize(canvas){
     const dpr = Math.min(window.devicePixelRatio || 1, CONFIG.dprCap);
-    const w = Math.floor(canvas.clientWidth * dpr), h = Math.floor(canvas.clientHeight * dpr);
+    const w = Math.max(1, Math.floor(canvas.clientWidth * dpr));
+    const h = Math.max(1, Math.floor(canvas.clientHeight * dpr));
     if (canvas.width !== w || canvas.height !== h){ canvas.width = w; canvas.height = h; }
-    gl.viewport(0, 0, canvas.width, canvas.height);
+    if (w === W && h === H && scene) return;            // size unchanged → keep targets
+    W = w; H = h;
+    const bs = CONFIG.post.bloomScale;
+    const bw = Math.max(1, Math.floor(W * bs)), bh2 = Math.max(1, Math.floor(H * bs));
+    disposeTarget(scene); disposeTarget(bloomA); disposeTarget(bloomB);
+    scene  = makeTarget(W, H);
+    bloomA = makeTarget(bw, bh2);
+    bloomB = makeTarget(bw, bh2);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   }
-  // uniform-adapter: DerivedState → uniforms (extend HERE as the shader grows)
+
+  function drawQuad(aLoc){
+    gl.bindBuffer(gl.ARRAY_BUFFER, quad);
+    gl.enableVertexAttribArray(aLoc);
+    gl.vertexAttribPointer(aLoc, 2, gl.FLOAT, false, 0, 0);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+  }
+
+  // uniform-adapter + multi-pass: scene → bright/blur(H) → blur(V) → composite
   function render(state){
-    gl.uniform2f(u.resolution, gl.drawingBufferWidth, gl.drawingBufferHeight);
+    const P = CONFIG.post;
+
+    // PASS A — render the scene into the scene target
+    gl.bindFramebuffer(gl.FRAMEBUFFER, scene.fbo);
+    gl.viewport(0, 0, W, H);
+    gl.useProgram(sceneProg);
+    gl.uniform2f(u.resolution, W, H);
     gl.uniform1f(u.phase, state.phase);   // [0,1) — the only zoom driver
     gl.uniform1f(u.criticality, state.criticality);
     gl.uniform1f(u.fork, state.forkCue);
@@ -636,7 +744,37 @@ const GPU = (() => {
     gl.uniform1f(u.lens, state.lens);
     gl.uniform1f(u.bh, state.bh);
     gl.uniform1f(u.time, (performance.now() - started) / 1000);
-    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    drawQuad(aScene);
+
+    // PASS B — bright-pass + horizontal blur into bloomA
+    gl.useProgram(blurProg);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, bloomA.fbo);
+    gl.viewport(0, 0, bloomA.w, bloomA.h);
+    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, scene.tex);
+    gl.uniform1i(bu.tex, 0);
+    gl.uniform2f(bu.res, bloomA.w, bloomA.h);
+    gl.uniform2f(bu.step, 1.0 / scene.w, 0.0);
+    gl.uniform1f(bu.thresh, P.bloomThreshold);
+    drawQuad(aBlur);
+
+    // PASS C — vertical blur into bloomB (no threshold)
+    gl.bindFramebuffer(gl.FRAMEBUFFER, bloomB.fbo);
+    gl.viewport(0, 0, bloomB.w, bloomB.h);
+    gl.bindTexture(gl.TEXTURE_2D, bloomA.tex);
+    gl.uniform2f(bu.res, bloomB.w, bloomB.h);
+    gl.uniform2f(bu.step, 0.0, 1.0 / bloomA.h);
+    gl.uniform1f(bu.thresh, 0.0);
+    drawQuad(aBlur);
+
+    // PASS D — composite (scene + bloom) with ACES tonemap, to the canvas
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.viewport(0, 0, W, H);
+    gl.useProgram(compProg);
+    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, scene.tex);  gl.uniform1i(cu.scene, 0);
+    gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, bloomB.tex); gl.uniform1i(cu.bloom, 1);
+    gl.uniform2f(cu.res, W, H);
+    gl.uniform1f(cu.strength, P.bloomStrength);
+    drawQuad(aComp);
   }
   return { init, resize, render };
 })();
