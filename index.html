@@ -611,13 +611,25 @@ const GPU = (() => {
       // photon ring: a thin bright halo at q≈1 (light grazing the horizon)
       float ring = exp(-pow((q - 1.0) * 7.0, 2.0));
       col += u_bh * ring * vec3(1.0, 0.93, 0.78) * 0.7;
-      // accretion disk: equatorial band, Doppler-beamed, hot-inner→cool-outer
-      float sinA = uv.y / r;                                  // sin(angle): 0 on the equator
-      float band = exp(-sinA * sinA * 7.0);                   // thin near the horizontal plane
-      float annulus = smoothstep(1.15, 1.5, q) * (1.0 - smoothstep(3.4, 5.0, q));
-      float doppler = 0.55 + 0.85 * clamp(uv.x / r * 0.5 + 0.5, 0.0, 1.0);  // brighter approaching side
-      vec3  diskCol = mix(vec3(0.75,0.86,1.0), vec3(1.0,0.55,0.22), smoothstep(1.3, 4.0, q));
-      col += u_bh * band * annulus * doppler * diskCol * 1.15;
+      // ACCRETION DISK — inclined and gravitationally LENSED (Interstellar-style).
+      // The flat disk is viewed near edge-on (cosI small → vertically squashed
+      // ellipse), and lensing lifts the far side into bright arcs that wrap over
+      // and under the shadow. q,qe are in Einstein-radius units; θE-scaled so the
+      // geometry is scale-free. All scaled by u_bh → 0 at the seam.
+      float cosI = 0.34;                                      // disk inclination (near edge-on)
+      vec2  ed   = vec2(uv.x, uv.y / cosI);                   // un-project the inclined plane
+      float qe   = length(ed) / max(thetaE, 1e-3);            // elliptical radius (θE units)
+      float inR = 1.45, outR = 4.6;
+      float annulus = smoothstep(inR, inR*1.12, qe) * (1.0 - smoothstep(outR*0.82, outR, qe));
+      // Doppler beaming: the approaching (+x) side is brighter and bluer
+      float dopp = 0.42 + 1.05 * clamp(ed.x / max(length(ed), 1e-4) * 0.5 + 0.5, 0.0, 1.0);
+      vec3  diskCol = mix(vec3(0.80,0.88,1.0), vec3(1.0,0.52,0.20), smoothstep(inR, outR, qe));
+      // direct image, occluded where the far half passes behind the shadow (top, near horizon)
+      float behind = step(0.0, uv.y) * (1.0 - smoothstep(1.05, 1.30, q));
+      float direct = annulus * (1.0 - behind);
+      // lensed secondary image: bright arcs of the far side hugging the photon ring (top & bottom)
+      float arc = exp(-pow((q - 1.28) * 5.0, 2.0)) * smoothstep(0.22, 0.6, abs(uv.y) / r);
+      col += u_bh * (direct * dopp + arc * 1.2) * diskCol * 1.25;
 
       // RICCI / volume — isotropic scale loss. As volume→0 the field washes toward a
       // scaleless tone (scale stops meaning anything). Restored to 1 at the seam, and
