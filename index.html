@@ -318,9 +318,9 @@ const CONFIG = {
     weyl:  { a:0.84, peak:0.93, b:0.998, amp:0.45 },  // shear (anisotropic, area-preserving) persists
     rings: { a:0.80, peak:0.90, b:0.99,  amp:1.00 },  // CCC concentric circles seeding the next sky
   },
-  // Black hole presence (collapse → evaporation). Drives gravitational lensing
-  // (Einstein ring + shadow) and the accretion disk. bump → 0 at the seam.
-  bh: { a:0.42, peak:0.64, b:0.90, lensAmp:0.034 },   // lensAmp = max Einstein radius² (screen units)
+  // Black hole presence — confined to the BH→Hawking stage so the echoing field
+  // stays visible. Drives the 3D raymarch (and 2D background lensing). 0 at the seam.
+  bh: { a:0.66, peak:0.78, b:0.88, lensAmp:0.034 },   // lensAmp = max Einstein radius² (screen units)
   // Post-processing (bloom + ACES tonemap). Bloom is a pure function of the
   // seam-safe scene image, so it can't affect the loop.
   post: { bloomThreshold:0.62, bloomStrength:0.95, bloomScale:0.5 },  // scale = bloom-buffer res factor
@@ -618,13 +618,13 @@ const GPU = (() => {
     // that graze wind into the photon ring, and the equatorial disk is crossed up to
     // twice → it wraps over the top. Relativistic Doppler + beaming on the disk. ---
     vec3 blackHole3D(vec2 p){
-      const float rs = 2.0, rin = 6.0, rout = 19.0;
-      float incl = 1.37;                                      // ~78° from the disk normal
-      vec3 cam = vec3(0.0, sin(incl), -cos(incl)) * 28.0;
+      const float rs = 2.0, rin = 5.5, rout = 22.0;
+      float incl = 1.16;                                      // ~66° from the disk normal (see more disk)
+      vec3 cam = vec3(0.0, sin(incl), -cos(incl)) * 30.0;
       vec3 fwd = normalize(-cam);
       vec3 rgt = normalize(cross(vec3(0.0,1.0,0.0), fwd));
       vec3 upv = cross(fwd, rgt);
-      vec3 dir = normalize(fwd + (p.x*rgt + p.y*upv) * 0.9);
+      vec3 dir = normalize(fwd + (p.x*rgt + p.y*upv) * 0.95);
 
       vec3 pos = cam, vel = dir;
       vec3 hv = cross(pos, vel); float h2 = dot(hv, hv);      // conserved angular momentum²
@@ -633,8 +633,8 @@ const GPU = (() => {
       for (int i = 0; i < 130; i++){
         float r = length(pos);
         if (r < rs){ captured = true; break; }
-        if (r > 60.0 && dot(pos, vel) > 0.0) break;           // escaped to infinity
-        float dt  = clamp(r * 0.10, 0.25, 2.2);               // adaptive step (fine near the hole)
+        if (r > 64.0 && dot(pos, vel) > 0.0) break;           // escaped to infinity
+        float dt  = clamp(r * 0.09, 0.20, 2.2);               // adaptive step (fine near the hole)
         vec3  acc = -1.5 * h2 * pos / pow(dot(pos,pos), 2.5); // GR light bending
         vec3  nvel = vel + acc * dt;
         vec3  npos = pos + nvel * dt;
@@ -642,21 +642,25 @@ const GPU = (() => {
           vec3 cp = mix(pos, npos, pos.y / (pos.y - npos.y));
           float rd = length(cp.xz);
           if (rd > rin && rd < rout){
-            float tn = (rd - rin) / (rout - rin);
+            float tn = (rd - rin) / (rout - rin);                        // 0 inner → 1 outer
+            float az = atan(cp.z, cp.x);
+            // swirling density bands, slowly rotating (cosmetic time; bh=0 at seam → safe)
+            float swirl = 0.55 + 0.45*sin(az*4.0 - log(rd)*6.0 + u_time*1.3);
+            float dens  = swirl * smoothstep(rin, rin*1.3, rd) * (1.0 - smoothstep(rout*0.65, rout, rd));
             vec3  vorb = normalize(cross(vec3(0.0,1.0,0.0), cp));        // Keplerian orbital direction
-            float beta = 0.42 * sqrt(rin / rd);                          // v/c, faster inward
+            float beta = 0.46 * sqrt(rin / rd);                          // v/c, faster inward
             float mu   = dot(vorb, -normalize(vel));                     // line-of-sight component
             float dop  = 1.0 / (1.0 - beta * mu + 1e-3);                 // Doppler factor δ
             float beam = pow(clamp(dop, 0.1, 4.0), 3.0);                 // beaming ∝ δ³
-            vec3  temp = mix(vec3(1.0,0.85,0.55), vec3(1.0,0.40,0.18), tn);
-            vec3  tint = mix(vec3(1.0,0.40,0.20), vec3(0.70,0.85,1.0), clamp((dop-0.6)/0.95, 0.0, 1.0));
-            acc_col += temp * tint * (1.0 - smoothstep(rin, rout, rd)) * beam * 0.5;
+            vec3  temp = mix(vec3(1.0,0.95,0.80), vec3(1.0,0.45,0.15), tn); // hot white-ish inner → orange
+            vec3  tint = mix(vec3(1.0,0.42,0.18), vec3(0.70,0.85,1.0), clamp((dop-0.55)/0.9, 0.0, 1.0));
+            acc_col += temp * tint * dens * beam * (0.6 + (1.0 - tn) * 1.4);  // inner edge blazes
           }
         }
         pos = npos; vel = nvel;
       }
       vec3 bg = captured ? vec3(0.0) : starField(normalize(vel));
-      return bg + acc_col;
+      return bg + acc_col * 0.9;
     }
 
     void main(){
