@@ -689,9 +689,10 @@ const GPU = (() => {
           if (rd > rin && rd < rout){
             float tn = (rd - rin) / (rout - rin);                        // 0 inner → 1 outer
             float az = atan(cp.z, cp.x);
-            // swirling density bands, slowly rotating (cosmetic time; bh=0 at seam → safe)
-            float swirl = 0.55 + 0.45*sin(az*4.0 - log(rd)*6.0 + u_time*1.3);
-            float dens  = swirl * smoothstep(rin, rin*1.3, rd) * (1.0 - smoothstep(rout*0.65, rout, rd));
+            // gentle azimuthal density variation, slowly rotating (cosmetic time;
+            // bh=0 at seam → safe). Smooth, not spoky.
+            float swirl = 0.72 + 0.28*sin(az*3.0 + u_time*0.9);
+            float dens  = swirl * smoothstep(rin, rin*1.4, rd) * (1.0 - smoothstep(rout*0.55, rout, rd));
             vec3  vorb = normalize(cross(vec3(0.0,1.0,0.0), cp));        // Keplerian orbital direction
             float beta = 0.46 * sqrt(rin / rd);                          // v/c, faster inward
             float mu   = dot(vorb, -normalize(vel));                     // line-of-sight component
@@ -767,8 +768,8 @@ const GPU = (() => {
       // GRAVITATIONAL REDSHIFT — light climbing out of the well is reddened and
       // dimmed toward the deep centre, more so near criticality. Radial (r-based) →
       // phase-independent → seam-safe.
-      float gr = smoothstep(0.55, 0.0, r) * (0.18 + 0.55 * u_criticality);
-      col *= mix(vec3(1.0), vec3(1.06, 0.66, 0.42), gr);
+      float gr = smoothstep(0.5, 0.0, r) * (0.10 + 0.32 * u_criticality);
+      col *= mix(vec3(1.0), vec3(1.03, 0.80, 0.62), gr);
 
       // RELIEF SHADING — emboss the structure from its own luminance gradient so the
       // lattice/collapse read as 3D surfaces, not flat. Strength rises with criticality
@@ -786,7 +787,9 @@ const GPU = (() => {
       // (bent geodesics → photon ring, disk wrapping over the top, Doppler). The
       // crossfade presence is 0 at the seam, so the loop is untouched; the branch
       // is coherent (same for all pixels) so it costs nothing the rest of the time.
-      float bhMix = smoothstep(0.12, 0.5, u_bh);
+      // snap to a full black hole quickly so the busy field underneath can't bleed
+      // through into a muddy blend (only a brief crossfade at the window edges).
+      float bhMix = smoothstep(0.04, 0.22, u_bh);
       if (bhMix > 0.001) col = mix(col, blackHole3D(uv0), bhMix);
 
       // RICCI / volume — isotropic scale loss. As volume→0 the field washes toward a
