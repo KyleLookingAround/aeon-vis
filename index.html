@@ -134,29 +134,31 @@
   .kbd-only   { display:none;  }
 
   /* Control buttons — the only interactive HUD elements (pointer-events:auto).
-     44px tap targets, stacked in the top-right corner. */
-  .ctl-btn { position:fixed; top:calc(var(--safe-t) + var(--edge));
-             width:44px; height:44px; display:grid; place-items:center; padding:0;
+     44px tap targets, laid out right-to-left in a flex bar (hidden buttons just
+     collapse out of the row — no manual offsets). */
+  #ctl-bar { position:fixed; top:calc(var(--safe-t) + var(--edge)); right:calc(var(--safe-r) + var(--edge));
+             display:flex; gap:8px; z-index:3; pointer-events:none; }
+  .ctl-btn { width:44px; height:44px; display:grid; place-items:center; padding:0;
              border:1px solid var(--hairline); border-radius:6px; background:var(--panel);
              color:var(--ink-dim); cursor:pointer; pointer-events:auto;
              -webkit-backdrop-filter:blur(6px); backdrop-filter:blur(6px);
              transition:color .15s ease, border-color .15s ease; }
   .ctl-btn:hover, .ctl-btn:active { color:var(--ink); border-color:rgba(160,180,210,0.32); }
   .ctl-btn:focus-visible { outline:1px solid var(--solid); outline-offset:2px; }
+  .ctl-btn.on { color:var(--accent, var(--solid)); border-color:var(--accent, var(--solid)); }
   .ctl-btn svg { width:20px; height:20px; display:block; }
 
-  /* fullscreen (rightmost); icon swaps via body.fs; hidden where there's no
-     Fullscreen API (body.no-fs, e.g. iPhone Safari). */
-  #fs-btn  { right:calc(var(--safe-r) + var(--edge)); }
+  /* cosmic-web mode toggle; lit (.on) while zoomed out */
+  body.web #mode-btn { color:var(--interpretive); border-color:var(--interpretive); }
+
+  /* fullscreen — icon swaps via body.fs; hidden where there's no Fullscreen API
+     (body.no-fs, e.g. iPhone Safari) — the flex row just closes the gap. */
   #fs-btn .ic-exit { display:none; }
   body.fs #fs-btn .ic-enter { display:none; }
   body.fs #fs-btn .ic-exit  { display:block; }
   body.no-fs #fs-btn { display:none; }
 
-  /* show/hide text (left of fullscreen); eye ↔ eye-off via body.hud-hidden.
-     Slides to the rightmost slot when the fullscreen button is absent. */
-  #hud-btn { right:calc(var(--safe-r) + var(--edge) + 52px); }
-  body.no-fs #hud-btn { right:calc(var(--safe-r) + var(--edge)); }
+  /* show/hide text — eye ↔ eye-off via body.hud-hidden */
   #hud-btn .ic-eyeoff { display:none; }
   body.hud-hidden #hud-btn .ic-eye    { display:none; }
   body.hud-hidden #hud-btn .ic-eyeoff { display:block; }
@@ -196,26 +198,36 @@
     <span id="chip-conf">—</span>
   </div>
 
-  <!-- Control buttons (the only interactive HUD elements). Icons swap via body
-       classes. fs-btn hidden via body.no-fs where there's no Fullscreen API. -->
-  <button id="hud-btn" class="ctl-btn" type="button" aria-label="Show/hide text" title="Show/hide text (h)">
-    <svg class="ic-eye" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-         stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-      <path d="M2 12s3.6-6.5 10-6.5S22 12 22 12s-3.6 6.5-10 6.5S2 12 2 12z" />
-      <circle cx="12" cy="12" r="2.6" /></svg>
-    <svg class="ic-eyeoff" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-         stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-      <path d="M2 12s3.6-6.5 10-6.5S22 12 22 12s-3.6 6.5-10 6.5S2 12 2 12z" />
-      <line x1="4" y1="4" x2="20" y2="20" /></svg>
-  </button>
-  <button id="fs-btn" class="ctl-btn" type="button" aria-label="Toggle fullscreen" title="Fullscreen (f)">
-    <svg class="ic-enter" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-         stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-      <path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" /></svg>
-    <svg class="ic-exit" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-         stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-      <path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5" /></svg>
-  </button>
+  <!-- Control buttons (the only interactive HUD elements), in a right-aligned
+       flex bar. Icons swap via body classes; fs-btn collapses out where there's
+       no Fullscreen API. Order (left→right): mode · text · fullscreen. -->
+  <div id="ctl-bar">
+    <button id="mode-btn" class="ctl-btn" type="button" aria-label="Cosmic-web zoom-out mode" title="Cosmic web / aeon (m)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+           stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <circle cx="12" cy="12" r="2.2" /><circle cx="5" cy="6" r="1" /><circle cx="19" cy="7" r="1" />
+        <circle cx="18" cy="17" r="1" /><circle cx="6" cy="18" r="1" />
+        <path d="M12 12L5 6M12 12l7-5M12 12l6 5M12 12l-6 6" /></svg>
+    </button>
+    <button id="hud-btn" class="ctl-btn" type="button" aria-label="Show/hide text" title="Show/hide text (h)">
+      <svg class="ic-eye" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+           stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M2 12s3.6-6.5 10-6.5S22 12 22 12s-3.6 6.5-10 6.5S2 12 2 12z" />
+        <circle cx="12" cy="12" r="2.6" /></svg>
+      <svg class="ic-eyeoff" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+           stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M2 12s3.6-6.5 10-6.5S22 12 22 12s-3.6 6.5-10 6.5S2 12 2 12z" />
+        <line x1="4" y1="4" x2="20" y2="20" /></svg>
+    </button>
+    <button id="fs-btn" class="ctl-btn" type="button" aria-label="Toggle fullscreen" title="Fullscreen (f)">
+      <svg class="ic-enter" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+           stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" /></svg>
+      <svg class="ic-exit" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+           stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5" /></svg>
+    </button>
+  </div>
 
   <!-- bottom dock: caption · stage timeline (scrubbable) · stat readout · hint -->
   <div id="dock" class="hud">
@@ -233,7 +245,7 @@
     </div>
     <div id="hint">
       <span class="touch-only">tap · play/pause &nbsp;·&nbsp; drag · scrub</span>
-      <span class="kbd-only">space play/pause &nbsp;·&nbsp; ← → scrub &nbsp;·&nbsp; h text &nbsp;·&nbsp; f fullscreen &nbsp;·&nbsp; ?phase= jump &nbsp;·&nbsp; ?debug</span>
+      <span class="kbd-only">space play/pause &nbsp;·&nbsp; ← → scrub &nbsp;·&nbsp; m cosmic web &nbsp;·&nbsp; h text &nbsp;·&nbsp; f fullscreen &nbsp;·&nbsp; ?phase= jump &nbsp;·&nbsp; ?debug</span>
     </div>
   </div>
   <div id="debug"></div>
@@ -252,6 +264,7 @@ const CONFIG = {
   baseRate: 0.05,         // phase units / second at rate 1.0 (slow, contemplative)
   seamTol: 1e-4,          // continuity assertion tolerance for periodic fields
   keyScrub: 0.005,        // phase step per arrow-key press
+  webFade: 0.8,           // seconds to crossfade into/out of cosmic-web mode
   input: {                // touch/pointer: tap = play/pause, horizontal drag = scrub
     dragScrub: 1.1,       // phase units for a full screen-width drag
     tapMaxMove: 8,        // px of movement still counted as a tap (not a drag)
@@ -385,13 +398,19 @@ function assertSeamContinuity(){
    ============================================================================ */
 const Clock = {
   phase: 0, aeonCount: 0, playing: true, _last: 0,
+  web: 0, webTarget: 0,   // cosmic-web mode crossfade (temporal, not part of the spatial seam)
   init(){
     const q = new URLSearchParams(location.search);
     if (q.has("phase")){ this.phase = ((parseFloat(q.get("phase"))%1)+1)%1; this.playing = false; }
+    if (q.has("web")){ this.web = this.webTarget = 1; document.body.classList.add("web"); }
     if (q.has("debug")) document.body.classList.add("debug");
   },
   get logDepth(){ return (this.aeonCount + this.phase) * CONFIG.DELTA; },
   advance(dt){
+    // mode crossfade eases regardless of play/pause (it's a temporal blend)
+    const d = this.webTarget - this.web;
+    if (Math.abs(d) > 1e-4) this.web += Math.sign(d) * Math.min(Math.abs(d), dt / CONFIG.webFade);
+    else this.web = this.webTarget;
     if (!this.playing) return;
     // delta-time; variable rate hook (STEP 5) multiplies baseRate by state.zoomRate
     this.phase += CONFIG.baseRate * dt;
@@ -400,6 +419,10 @@ const Clock = {
   toggle(){ this.playing = !this.playing; },
   scrub(d){ this.playing = false; this.phase = ((this.phase + d)%1 + 1)%1; },
   seek(p){ this.playing = false; this.phase = ((p%1)+1)%1; },   // absolute (timeline scrub)
+  toggleMode(){
+    this.webTarget = this.webTarget > 0.5 ? 0 : 1;
+    document.body.classList.toggle("web", this.webTarget > 0.5);
+  },
 };
 
 /* ============================================================================
@@ -436,6 +459,7 @@ const GPU = (() => {
     uniform float u_lens;         // gravitational lensing: Einstein radius² (0 at wrap)
     uniform float u_bh;           // black-hole presence 0..1 (accretion disk; 0 at wrap)
     uniform float u_rings;        // CCC Hawking-point concentric circles (0 at wrap)
+    uniform float u_web;          // v2 cosmic-web zoom-OUT crossfade 0..1 (temporal, not spatial)
     uniform float u_time;         // COSMETIC ONLY — must never drive the zoom/seam
 
     #define TAU 6.28318530718
@@ -490,6 +514,39 @@ const GPU = (() => {
       float shell  = pow(1.0 - abs(fract(z)*2.0 - 1.0), 6.0);   // thin shell each Δ (seam-safe)
       float core   = smoothstep(0.45, 0.0, r);                  // intensifying centre
       return clamp(streak*0.45 + shell*0.7 + core, 0.0, 1.0);
+    }
+
+    // --- v2 COSMIC WEB — the zoom-OUT field. Same seamless log-polar framework,
+    // but the radial coordinate ADDS phase (zW = u + phase) so structure recedes
+    // toward the centre: we pull back to reveal filaments, voids and galaxies.
+    // 1-periodic in phase (tiled noise) → seamless in this mode too. Interpretive. ---
+    vec3 cosmicWeb(vec2 p){
+      float r   = max(length(p), 1e-4);
+      float ang = atan(p.y, p.x);
+      float u = log(r) / u_delta + 0.5;
+      float v = ang / TAU + 0.5;
+      float zW = u + u_phase;                  // OPPOSITE sign → zoom out
+
+      // filamentary network via ridged tiled noise (voids between, sheets along)
+      float n1 = pnoise(vec2(zW, v) * 3.0, 3.0);
+      float n2 = pnoise(vec2(zW, v) * 6.0, 6.0);
+      float fil = pow(1.0 - abs(2.0*n1 - 1.0), 3.0) + 0.5 * pow(1.0 - abs(2.0*n2 - 1.0), 4.0);
+      fil *= smoothstep(0.0, 0.12, r);
+
+      // galaxies — one hashed point per torus cell (seed BHs grown into early galaxies)
+      const float GN = 7.0;
+      vec2 gp = vec2(zW, v) * GN;
+      vec2 gi = floor(gp), gf = fract(gp) - 0.5;
+      vec2 off = (vec2(hash(mod(gi, vec2(GN))), hash(mod(gi + vec2(3.0), vec2(GN)))) - 0.5) * 0.7;
+      float gb  = hash(mod(gi + vec2(7.0), vec2(GN)));
+      float gal = smoothstep(0.10, 0.0, length(gf - off)) * (0.35 + gb) * smoothstep(0.0, 0.1, r);
+
+      vec3 voidc = vec3(0.010, 0.012, 0.022);                          // empty void
+      vec3 filc  = vec3(0.13, 0.15, 0.26);                             // cool filament
+      vec3 galc  = mix(vec3(1.0,0.80,0.55), vec3(0.70,0.82,1.0), gb);  // warm/cool galaxies
+      vec3 c = mix(voidc, filc, clamp(fil, 0.0, 1.0));
+      c += gal * galc * 1.5;
+      return c;
     }
 
     void main(){
@@ -582,6 +639,11 @@ const GPU = (() => {
       float circ = pow(0.5 + 0.5*cos(r0 * 26.0 * TAU), 8.0);     // thin bright circles
       float rfade = smoothstep(0.04, 0.12, r0) * (1.0 - smoothstep(0.45, 0.85, r0));
       col += u_rings * circ * rfade * vec3(0.55, 0.78, 1.0) * 0.5;
+
+      // v2 COSMIC WEB — crossfade to the zoom-OUT field. u_web is a temporal mode
+      // blend (not phase-driven), and both fields are seam-safe, so the spatial loop
+      // stays exact at every value of u_web.
+      if (u_web > 0.0) col = mix(col, cosmicWeb(uv0), u_web);
 
       // faint cosmetic grain (allowed — does not touch the zoom/seam)
       float g = hash(gl_FragCoord.xy + fract(u_time));
@@ -702,6 +764,7 @@ const GPU = (() => {
       lens:        gl.getUniformLocation(sceneProg, "u_lens"),
       bh:          gl.getUniformLocation(sceneProg, "u_bh"),
       rings:       gl.getUniformLocation(sceneProg, "u_rings"),
+      web:         gl.getUniformLocation(sceneProg, "u_web"),
       time:        gl.getUniformLocation(sceneProg, "u_time"),
     };
     bu = { tex: gl.getUniformLocation(blurProg, "u_tex"), res: gl.getUniformLocation(blurProg, "u_res"),
@@ -738,7 +801,7 @@ const GPU = (() => {
   }
 
   // uniform-adapter + multi-pass: scene → bright/blur(H) → blur(V) → composite
-  function render(state){
+  function render(state, web){
     const P = CONFIG.post;
 
     // PASS A — render the scene into the scene target
@@ -755,6 +818,7 @@ const GPU = (() => {
     gl.uniform1f(u.lens, state.lens);
     gl.uniform1f(u.bh, state.bh);
     gl.uniform1f(u.rings, state.rings);
+    gl.uniform1f(u.web, web || 0);
     gl.uniform1f(u.time, (performance.now() - started) / 1000);
     drawQuad(aScene);
 
@@ -815,7 +879,11 @@ const HUD = (() => {
     });
   }
   function set(id, val){ if (cache[id] !== val){ cache[id] = val; el[id].textContent = val; } }
-  function update(state, now, playing){
+  // a synthetic "stage" describing the cosmic-web zoom-out mode
+  const WEB_STAGE = { label:"Cosmic web", confidence:"interpretive",
+    caption:"Zooming outward — primordial seed black holes grown into cosmic filaments, voids and the first galaxies. (illustrative)" };
+
+  function update(state, now, playing, web){
     // playhead every frame — smooth, just one style write
     el["tl-head"].style.left = (state.phase * 100) + "%";
 
@@ -826,7 +894,8 @@ const HUD = (() => {
     set("r-depth", state.logDepth.toFixed(2));
     set("r-state", playing ? "▸ running" : "‖ paused");
 
-    const s = state.stage;
+    // in cosmic-web mode the aeon stages don't apply — show the mode instead
+    const s = web > 0.5 ? WEB_STAGE : state.stage;
     set("chip-label", s.label);
     set("chip-conf", s.confidence);
     set("caption", s.caption);
@@ -837,10 +906,10 @@ const HUD = (() => {
       el.chip.dataset.conf = s.confidence;
       document.body.dataset.conf = s.confidence;   // --accent for dock/state
     }
-    const idx = TIMELINE.indexOf(s);
+    const idx = web > 0.5 ? -1 : TIMELINE.indexOf(s);
     if (cache.seg !== idx){
-      if (cache.seg != null && el.segs[cache.seg]) el.segs[cache.seg].classList.remove("on");
-      if (el.segs[idx]) el.segs[idx].classList.add("on");
+      if (cache.seg != null && cache.seg >= 0 && el.segs[cache.seg]) el.segs[cache.seg].classList.remove("on");
+      if (idx >= 0 && el.segs[idx]) el.segs[idx].classList.add("on");
       cache.seg = idx;
     }
   }
@@ -912,6 +981,14 @@ function main(){
   }
   hudBtn.addEventListener("click", toggleHud);
 
+  // Cosmic-web zoom-OUT mode (v2): crossfade between the aeon and the cosmic web.
+  const modeBtn = document.getElementById("mode-btn");
+  function toggleMode(){
+    Clock.toggleMode();
+    modeBtn.setAttribute("aria-pressed", String(Clock.webTarget > 0.5));
+  }
+  modeBtn.addEventListener("click", toggleMode);
+
   let last = performance.now();
   document.addEventListener("keydown", e => {
     if (e.code === "Space"){ e.preventDefault(); Clock.toggle(); }
@@ -919,6 +996,7 @@ function main(){
     if (e.code === "ArrowLeft")  Clock.scrub(-CONFIG.keyScrub);
     if (e.code === "KeyF"){ e.preventDefault(); toggleFullscreen(); }
     if (e.code === "KeyH"){ e.preventDefault(); toggleHud(); }
+    if (e.code === "KeyM"){ e.preventDefault(); toggleMode(); }
   });
 
   // Touch / pointer input (covers mouse, touch and pen via Pointer Events):
@@ -978,8 +1056,8 @@ function main(){
     Clock.advance(dt);
     GPU.resize(canvas);
     const state = derive(Clock.phase, Clock.logDepth, Clock.aeonCount);  // PURE
-    GPU.render(state);                    // sink 1
-    HUD.update(state, now, Clock.playing); // sink 2
+    GPU.render(state, Clock.web);                  // sink 1
+    HUD.update(state, now, Clock.playing, Clock.web); // sink 2
     debugText(state);
     requestAnimationFrame(frame);
   }
