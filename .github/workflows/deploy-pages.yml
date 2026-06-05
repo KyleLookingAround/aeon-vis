@@ -1,0 +1,46 @@
+name: Deploy to GitHub Pages
+
+# The site is a single self-contained index.html at the repo root — no build step.
+# This publishes the repository root as-is to GitHub Pages.
+
+on:
+  push:
+    branches: ["claude/repo-setup-zip-gR3EV"]
+  workflow_dispatch:
+
+# Permissions needed for the deploy-pages action to authenticate via OIDC.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Allow one concurrent deployment; let an in-progress run finish.
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure Pages
+        # enablement: true turns the Pages site on if it isn't already,
+        # so no manual Settings → Pages toggle is required.
+        uses: actions/configure-pages@v5
+        with:
+          enablement: true
+
+      - name: Upload artifact (repo root)
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: "."
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
