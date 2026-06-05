@@ -672,15 +672,22 @@ const GPU = (() => {
       float qe   = length(ed) / max(thetaE, 1e-3);            // elliptical radius (θE units)
       float inR = 1.45, outR = 4.6;
       float annulus = smoothstep(inR, inR*1.12, qe) * (1.0 - smoothstep(outR*0.82, outR, qe));
-      // Doppler beaming: the approaching (+x) side is brighter and bluer
-      float dopp = 0.42 + 1.05 * clamp(ed.x / max(length(ed), 1e-4) * 0.5 + 0.5, 0.0, 1.0);
-      vec3  diskCol = mix(vec3(0.80,0.88,1.0), vec3(1.0,0.52,0.20), smoothstep(inR, outR, qe));
+      // RELATIVISTIC DOPPLER — orbital material is faster (more relativistic) toward
+      // the inner edge. The approaching (+x) side is blueshifted and beamed bright;
+      // the receding side is redshifted and dimmed. δ = 1/(1−β·μ); intensity ∝ δ³.
+      float beta = 0.5 * smoothstep(outR, inR, qe);          // v/c, rising toward the inner edge
+      float mu   = ed.x / max(length(ed), 1e-4);             // line-of-sight velocity proxy (±)
+      float dopp = 1.0 / (1.0 - beta * mu + 1e-3);           // Doppler factor δ
+      float beam = pow(clamp(dopp, 0.05, 4.0), 3.0);         // relativistic beaming ∝ δ³
+      vec3  temp = mix(vec3(0.95,0.86,0.66), vec3(1.0,0.55,0.26), smoothstep(inR, outR, qe)); // T gradient
+      vec3  tint = mix(vec3(1.0,0.42,0.22), vec3(0.72,0.85,1.0), clamp((dopp-0.6)/0.95, 0.0, 1.0)); // red↔blue
+      vec3  diskCol = temp * tint;
       // direct image, occluded where the far half passes behind the shadow (top, near horizon)
       float behind = step(0.0, uv.y) * (1.0 - smoothstep(1.05, 1.30, q));
       float direct = annulus * (1.0 - behind);
       // lensed secondary image: bright arcs of the far side hugging the photon ring (top & bottom)
       float arc = exp(-pow((q - 1.28) * 5.0, 2.0)) * smoothstep(0.22, 0.6, abs(uv.y) / r);
-      col += u_bh * (direct * dopp + arc * 1.2) * diskCol * 1.25;
+      col += u_bh * (direct * beam + arc * 1.3) * diskCol * 0.85;
 
       // RICCI / volume — isotropic scale loss. As volume→0 the field washes toward a
       // scaleless tone (scale stops meaning anything). Restored to 1 at the seam, and
