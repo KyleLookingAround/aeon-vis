@@ -116,6 +116,10 @@
   .tl-seg.c-contested    { background:var(--contested); }
   .tl-seg.c-interpretive { background:var(--interpretive); }
   .tl-seg.on { opacity:0.9; }
+  /* show the segment set matching the mode (aeon vs cosmic web) */
+  .seg-web { display:none; }
+  body.web .seg-aeon { display:none; }
+  body.web .seg-web  { display:block; }
   #tl-head { position:absolute; top:1px; bottom:1px; width:2px; margin-left:-1px;
              background:var(--ink); box-shadow:0 0 8px rgba(220,235,255,0.6); }
 
@@ -314,11 +318,29 @@ const TIMELINE = [
   { phaseStart:0.85, phaseEnd:1.00, id:"crossover",label:"Conformal crossover",confidence:"interpretive",
     caption:"With no mass left, scale loses meaning — the universe is conformally reborn. Only the Weyl (tidal) structure carries through." },
 ];
-function stageForPhase(p){
-  for (let i=0;i<TIMELINE.length;i++){ const s=TIMELINE[i];
-    if (p>=s.phaseStart && p<s.phaseEnd) return s; }
-  return TIMELINE[TIMELINE.length-1];
+// v2 cosmic-web zoom-OUT timeline: structure scales revealed as we pull back.
+// Structure formation itself is solid; the rendered specifics are illustrative.
+const WEB_TIMELINE = [
+  { phaseStart:0.00, phaseEnd:0.20, id:"stars",     label:"Stellar neighbourhood", confidence:"solid",
+    caption:"Pulling back from a star-forming region — the smallest knots of the cosmic web." },
+  { phaseStart:0.20, phaseEnd:0.40, id:"galaxy",    label:"Galaxies",              confidence:"solid",
+    caption:"Billions of stars resolve into galaxies, each seeded by an early collapsed core." },
+  { phaseStart:0.40, phaseEnd:0.62, id:"clusters",  label:"Groups & clusters",     confidence:"solid",
+    caption:"Galaxies are bound into groups and clusters at the nodes where filaments cross." },
+  { phaseStart:0.62, phaseEnd:0.82, id:"filaments", label:"Filaments & voids",     confidence:"interpretive",
+    caption:"Matter strings into a web of filaments and sheets, draining the great empty voids between." },
+  { phaseStart:0.82, phaseEnd:1.00, id:"web",       label:"Cosmic web",            confidence:"interpretive",
+    caption:"The largest scales — the cosmic web toward the horizon, where the next aeon's sky begins." },
+];
+function makeStageFinder(table){
+  return function(p){
+    for (let i=0;i<table.length;i++){ const s=table[i];
+      if (p>=s.phaseStart && p<s.phaseEnd) return s; }
+    return table[table.length-1];
+  };
 }
+const stageForPhase    = makeStageFinder(TIMELINE);
+const stageForPhaseWeb = makeStageFinder(WEB_TIMELINE);
 
 /* ============================================================================
    3. derive() — PURE. phase (+ monotonic counters) → DerivedState.
@@ -880,20 +902,20 @@ const HUD = (() => {
     el.chip = document.getElementById("chip");
     el["r-delta"].textContent = CONFIG.DELTA.toFixed(2);
 
-    // build the stage timeline once, from TIMELINE (the honesty layer as data)
-    el.segs = TIMELINE.map(s => {
+    // build BOTH stage timelines once (honesty layer as data). CSS shows the set
+    // matching the mode (body.web). Each segment is tinted by its confidence.
+    const build = (table, klass) => table.map(s => {
       const seg = document.createElement("div");
-      seg.className = "tl-seg c-" + s.confidence;
+      seg.className = "tl-seg " + klass + " c-" + s.confidence;
       seg.style.left  = (s.phaseStart * 100) + "%";
       seg.style.width = ((s.phaseEnd - s.phaseStart) * 100) + "%";
       el["tl-track"].appendChild(seg);
       return seg;
     });
+    el.segsAeon = build(TIMELINE, "seg-aeon");
+    el.segsWeb  = build(WEB_TIMELINE, "seg-web");
   }
   function set(id, val){ if (cache[id] !== val){ cache[id] = val; el[id].textContent = val; } }
-  // a synthetic "stage" describing the cosmic-web zoom-out mode
-  const WEB_STAGE = { label:"Cosmic web", confidence:"interpretive",
-    caption:"Zooming outward — primordial seed black holes grown into cosmic filaments, voids and the first galaxies. (illustrative)" };
 
   function update(state, now, playing, web){
     // playhead every frame — smooth, just one style write
@@ -906,23 +928,27 @@ const HUD = (() => {
     set("r-depth", state.logDepth.toFixed(2));
     set("r-state", playing ? "▸ running" : "‖ paused");
 
-    // in cosmic-web mode the aeon stages don't apply — show the mode instead
-    const s = web > 0.5 ? WEB_STAGE : state.stage;
+    // pick the timeline for the current mode; each has its own stages + segments
+    const isWeb = web > 0.5;
+    const table = isWeb ? WEB_TIMELINE : TIMELINE;
+    const segs  = isWeb ? el.segsWeb   : el.segsAeon;
+    const s = (isWeb ? stageForPhaseWeb : stageForPhase)(state.phase);
     set("chip-label", s.label);
     set("chip-conf", s.confidence);
     set("caption", s.caption);
 
-    // confidence drives the single accent (CSS var via data attribute) + active segment
+    // confidence drives the single accent (CSS var via data attribute)
     if (cache.conf !== s.confidence){
       cache.conf = s.confidence;
       el.chip.dataset.conf = s.confidence;
       document.body.dataset.conf = s.confidence;   // --accent for dock/state
     }
-    const idx = web > 0.5 ? -1 : TIMELINE.indexOf(s);
-    if (cache.seg !== idx){
-      if (cache.seg != null && cache.seg >= 0 && el.segs[cache.seg]) el.segs[cache.seg].classList.remove("on");
-      if (idx >= 0 && el.segs[idx]) el.segs[idx].classList.add("on");
-      cache.seg = idx;
+    // highlight the active segment (track the DOM node so mode-switches clear cleanly)
+    const active = segs[table.indexOf(s)] || null;
+    if (cache.activeSeg !== active){
+      if (cache.activeSeg) cache.activeSeg.classList.remove("on");
+      if (active) active.classList.add("on");
+      cache.activeSeg = active;
     }
   }
   return { init, update };
