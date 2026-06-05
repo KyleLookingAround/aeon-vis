@@ -511,6 +511,7 @@ const GPU = (() => {
     uniform float u_bh;           // black-hole presence 0..1 (accretion disk; 0 at wrap)
     uniform float u_rings;        // CCC Hawking-point concentric circles (0 at wrap)
     uniform float u_web;          // v2 cosmic-web zoom-OUT crossfade 0..1 (temporal, not spatial)
+    uniform vec2  u_view;         // 3D parallax look-around (pointer/gyro; phase-independent)
     uniform float u_time;         // COSMETIC ONLY — must never drive the zoom/seam
 
     #define TAU 6.28318530718
@@ -602,6 +603,11 @@ const GPU = (() => {
 
     void main(){
       vec2 uv0 = (gl_FragCoord.xy - 0.5*u_resolution) / u_resolution.y;   // screen-centred
+
+      // 3D PARALLAX — pointer/gyro look-around. The outer wall (large radius) swims
+      // more than the deep centre (small radius), so the funnel reads as a real 3D
+      // well you peer into. u_view is phase-independent → the spatial seam is untouched.
+      uv0 += u_view * (0.22 + dot(uv0, uv0) * 1.6);
 
       // WEYL shear — anisotropic, AREA-PRESERVING (det=1) hyperbolic boost: squeeze
       // along one diagonal, stretch the other. Identity at the seam (u_shear=0), so it
@@ -835,6 +841,7 @@ const GPU = (() => {
       bh:          gl.getUniformLocation(sceneProg, "u_bh"),
       rings:       gl.getUniformLocation(sceneProg, "u_rings"),
       web:         gl.getUniformLocation(sceneProg, "u_web"),
+      view:        gl.getUniformLocation(sceneProg, "u_view"),
       time:        gl.getUniformLocation(sceneProg, "u_time"),
     };
     bu = { tex: gl.getUniformLocation(blurProg, "u_tex"), res: gl.getUniformLocation(blurProg, "u_res"),
@@ -871,7 +878,7 @@ const GPU = (() => {
   }
 
   // uniform-adapter + multi-pass: scene → bright/blur(H) → blur(V) → composite
-  function render(state, web){
+  function render(state, web, view){
     const P = CONFIG.post;
 
     // PASS A — render the scene into the scene target
@@ -889,6 +896,7 @@ const GPU = (() => {
     gl.uniform1f(u.bh, state.bh);
     gl.uniform1f(u.rings, state.rings);
     gl.uniform1f(u.web, web || 0);
+    gl.uniform2f(u.view, view ? view.x : 0, view ? view.y : 0);
     gl.uniform1f(u.time, (performance.now() - started) / 1000);
     drawQuad(aScene);
 
@@ -1134,6 +1142,25 @@ function main(){
   timeline.addEventListener("pointerup", endTl);
   timeline.addEventListener("pointercancel", endTl);
 
+  // 3D PARALLAX look-around — pointer (desktop) or gyro (mobile) tilts the view;
+  // with no input, a gentle drift keeps the depth alive. Phase-independent → the
+  // spatial seam is never touched. Eased toward a target each frame.
+  const VIEW_AMP = 0.055;
+  const view = { x:0, y:0 }, vt = { x:0, y:0 };
+  let lastInput = 0, hadPointer = false, gyro = false;
+  const clampV = (x) => Math.min(Math.max(x, -1), 1);
+  window.addEventListener("pointermove", e => {
+    hadPointer = true; lastInput = performance.now();
+    vt.x =  (e.clientX / window.innerWidth  - 0.5) * 2 * VIEW_AMP;
+    vt.y = -(e.clientY / window.innerHeight - 0.5) * 2 * VIEW_AMP;
+  });
+  window.addEventListener("deviceorientation", e => {
+    if (e.gamma == null && e.beta == null) return;
+    gyro = true; lastInput = performance.now();
+    vt.x = clampV((e.gamma || 0) / 40) * VIEW_AMP;
+    vt.y = clampV(((e.beta || 45) - 45) / 40) * VIEW_AMP;
+  }, true);
+
   document.addEventListener("visibilitychange", () => { if (document.hidden) Clock.playing = false; });
 
   // survive context loss
@@ -1141,10 +1168,21 @@ function main(){
 
   function frame(now){
     const dt = Math.min((now - last) / 1000, 0.1); last = now;     // delta-time, clamped
+
+    // parallax target: ease toward input, or a slow drift when there's none (touch/idle)
+    if (!hadPointer && !gyro){
+      const t = now * 0.001;
+      vt.x = Math.sin(t * 0.30) * 0.5 * VIEW_AMP;
+      vt.y = Math.cos(t * 0.23) * 0.4 * VIEW_AMP;
+    }
+    const k = Math.min(1, dt * 3.5);
+    view.x += (vt.x - view.x) * k;
+    view.y += (vt.y - view.y) * k;
+
     Clock.advance(dt);
     GPU.resize(canvas);
     const state = derive(Clock.phase, Clock.logDepth, Clock.aeonCount);  // PURE
-    GPU.render(state, Clock.web);                  // sink 1
+    GPU.render(state, Clock.web, view);            // sink 1
     HUD.update(state, now, Clock.playing, Clock.web); // sink 2
     debugText(state);
     requestAnimationFrame(frame);
