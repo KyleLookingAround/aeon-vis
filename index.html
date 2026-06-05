@@ -640,73 +640,47 @@ const GPU = (() => {
       return c;
     }
 
-    // --- procedural starfield sampled by a 3D direction (the lensed background sky) ---
-    vec3 starField(vec3 dir){
-      float a = atan(dir.z, dir.x), b = asin(clamp(dir.y, -1.0, 1.0));
-      vec2 g = vec2(a/TAU + 0.5, b/3.14159 + 0.5) * 42.0;
-      vec2 gi = floor(g), gf = fract(g) - 0.5;
-      vec2 c  = (vec2(hash(gi + 1.7), hash(gi + 4.3)) - 0.5) * 0.7;
-      float star = smoothstep(0.07, 0.0, length(gf - c)) * pow(hash(gi), 6.0);
-      vec3  sc   = mix(vec3(0.7,0.8,1.0), vec3(1.0,0.85,0.7), hash(gi + 9.1));
-      return vec3(0.012, 0.015, 0.030) + star * sc * 2.2;     // deep space + a few bright stars
-    }
+    // --- 2-D black hole composite: shadow + Einstein ring + inclined disk with Doppler ---
+    // All quantities are in screen-plane (uv0 space). No geodesic integration needed:
+    // the thin-lens equation already handles the lensing, so we just shade the disk
+    // and shadow in the lensed image plane. u_bh and u_lens are 0 at the seam → safe.
+    vec3 blackHole2D(vec2 p, vec3 base){
+      float r = length(p);
+      float thetaE = sqrt(max(u_lens, 0.0));
+      float q = r / max(thetaE, 1e-3);          // normalised Einstein-ring radius
 
-    // --- TRUE 3D black hole — Schwarzschild null-geodesic raymarch (units M=1, rs=2).
-    // Integrates the bent photon path; rays that fall in are black (the shadow), rays
-    // that graze wind into the photon ring, and the equatorial disk is crossed up to
-    // twice → it wraps over the top. Relativistic Doppler + beaming on the disk. ---
-    vec3 blackHole3D(vec2 p){
-      const float rs = 2.0, rin = 5.5, rout = 22.0;
-      float incl = 1.16;                                      // ~66° from the disk normal (see more disk)
-      vec3 cam = vec3(0.0, sin(incl), -cos(incl)) * 30.0;
-      vec3 fwd = normalize(-cam);
-      vec3 rgt = normalize(cross(vec3(0.0,1.0,0.0), fwd));
-      vec3 upv = cross(fwd, rgt);
-      vec3 dir = normalize(fwd + (p.x*rgt + p.y*upv) * 0.95);
+      // shadow: darken toward the Schwarzschild shadow (q ≈ 0.82–0.95 × thetaE)
+      float shadow = smoothstep(0.82, 1.05, q);
+      vec3  col = base * mix(0.0, 1.0, shadow);
 
-      vec3 pos = cam, vel = dir;
-      vec3 hv = cross(pos, vel); float h2 = dot(hv, hv);      // conserved angular momentum²
-      vec3 acc_col = vec3(0.0); bool captured = false;
+      // photon ring: bright narrow arc at q ≈ 1
+      float ring = exp(-pow((q - 1.0) * 7.0, 2.0));
+      col += u_bh * ring * vec3(1.0, 0.93, 0.78) * 0.72;
 
-      for (int i = 0; i < 130; i++){
-        float r = length(pos);
-        if (r < rs){ captured = true; break; }
-        if (r > 64.0 && dot(pos, vel) > 0.0) break;           // escaped to infinity
-        float dt  = clamp(r * 0.09, 0.20, 2.2);               // adaptive step (fine near the hole)
-        // Schwarzschild light-bending + KERR frame-dragging: the gravitomagnetic
-        // field of a spinning mass (dipole along the spin axis ŷ) exerts a Lorentz-
-        // like force 2·v×B_g that swirls rays around the hole → a lopsided photon
-        // ring and a dragged inner disc (the signature of spin).
-        vec3  rhat = pos / r;
-        vec3  spinAx = vec3(0.0, 1.0, 0.0);
-        vec3  Bg = (3.0 * dot(spinAx, rhat) * rhat - spinAx) / (r*r*r);
-        vec3  acc = -1.5 * h2 * pos / pow(dot(pos,pos), 2.5) + 2.4 * cross(vel, Bg);
-        vec3  nvel = vel + acc * dt;
-        vec3  npos = pos + nvel * dt;
-        if (pos.y * npos.y < 0.0){                            // crossed the equatorial plane → disk
-          vec3 cp = mix(pos, npos, pos.y / (pos.y - npos.y));
-          float rd = length(cp.xz);
-          if (rd > rin && rd < rout){
-            float tn = (rd - rin) / (rout - rin);                        // 0 inner → 1 outer
-            float az = atan(cp.z, cp.x);
-            // gentle azimuthal density variation, slowly rotating (cosmetic time;
-            // bh=0 at seam → safe). Smooth, not spoky.
-            float swirl = 0.72 + 0.28*sin(az*3.0 + u_time*0.9);
-            float dens  = swirl * smoothstep(rin, rin*1.4, rd) * (1.0 - smoothstep(rout*0.55, rout, rd));
-            vec3  vorb = normalize(cross(vec3(0.0,1.0,0.0), cp));        // Keplerian orbital direction
-            float beta = 0.46 * sqrt(rin / rd);                          // v/c, faster inward
-            float mu   = dot(vorb, -normalize(vel));                     // line-of-sight component
-            float dop  = 1.0 / (1.0 - beta * mu + 1e-3);                 // Doppler factor δ
-            float beam = pow(clamp(dop, 0.1, 4.0), 3.0);                 // beaming ∝ δ³
-            vec3  temp = mix(vec3(1.0,0.95,0.80), vec3(1.0,0.45,0.15), tn); // hot white-ish inner → orange
-            vec3  tint = mix(vec3(1.0,0.42,0.18), vec3(0.70,0.85,1.0), clamp((dop-0.55)/0.9, 0.0, 1.0));
-            acc_col += temp * tint * dens * beam * (0.6 + (1.0 - tn) * 1.4);  // inner edge blazes
-          }
-        }
-        pos = npos; vel = nvel;
+      // inclined accretion disk — project disk plane onto the screen.
+      // incl ≈ 0.82 rad (~47°) from the viewing axis so we see an oval, not an edge-on line.
+      float incl = 0.82;
+      vec2  diskP = vec2(p.x, p.y / sin(incl));  // un-project to circular disk plane
+      float rd    = length(diskP);
+      float rin   = thetaE * 1.6, rout = thetaE * 4.8;
+
+      if (rd > rin && rd < rout){
+        float tn   = (rd - rin) / (rout - rin);             // 0 inner, 1 outer
+        float az   = atan(diskP.y, diskP.x);
+        float dens = smoothstep(rin, rin*1.35, rd) * (1.0 - smoothstep(rout*0.6, rout, rd));
+        dens *= 0.75 + 0.25*sin(az*3.0 + u_time*0.8);       // gentle swirl (cosmetic time; u_bh=0 at seam)
+
+        // relativistic Doppler + beaming: disk rotates in the +az direction
+        float beta = 0.42 * pow(max(rin/rd, 0.0), 0.5);     // Keplerian v/c
+        float mu   = sin(az) * sin(incl);                   // projection of orbital vel onto LOS
+        float dop  = 1.0 / max(1.0 - beta*mu, 0.25);
+        float beam = pow(clamp(dop, 0.1, 4.0), 3.0);
+
+        vec3  temp = mix(vec3(1.0,0.92,0.75), vec3(1.0,0.44,0.14), tn); // hot inner → orange outer
+        vec3  tint = mix(vec3(1.0,0.40,0.16), vec3(0.72,0.86,1.0), clamp((dop-0.55)/0.9, 0.0, 1.0));
+        col += u_bh * temp * tint * dens * beam * (0.55 + (1.0 - tn)*1.5);
       }
-      vec3 bg = captured ? vec3(0.0) : starField(normalize(vel));
-      return bg + acc_col * 0.9;
+      return col;
     }
 
     void main(){
@@ -782,15 +756,11 @@ const GPU = (() => {
       col *= 0.84 + 0.40 * dif;
       #endif
 
-      // ===== BLACK HOLE — TRUE 3D Schwarzschild raymarch =====================
-      // While the hole exists, crossfade the whole view to a real 3D black hole
-      // (bent geodesics → photon ring, disk wrapping over the top, Doppler). The
-      // crossfade presence is 0 at the seam, so the loop is untouched; the branch
-      // is coherent (same for all pixels) so it costs nothing the rest of the time.
-      // snap to a full black hole quickly so the busy field underneath can't bleed
-      // through into a muddy blend (only a brief crossfade at the window edges).
-      float bhMix = smoothstep(0.04, 0.22, u_bh);
-      if (bhMix > 0.001) col = mix(col, blackHole3D(uv0), bhMix);
+      // ===== BLACK HOLE — 2D lensing shadow + disk ===========================
+      // Thin-lens lensing is already applied (rSrc above). Here we composite the
+      // shadow, photon ring, and inclined accretion disk directly in the image plane.
+      // u_bh and u_lens are exactly 0 at the seam → the loop is untouched.
+      if (u_bh > 0.001) col = blackHole2D(uv0, col);
 
       // RICCI / volume — isotropic scale loss. As volume→0 the field washes toward a
       // scaleless tone (scale stops meaning anything). Restored to 1 at the seam, and
